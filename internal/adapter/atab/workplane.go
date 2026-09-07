@@ -257,17 +257,24 @@ func (w *WorkPlane) Probe(context.Context) (bool, string) {
 	var never []string
 	for _, h := range healths {
 		switch {
-		case h.LastSuccess.IsZero():
+		case h.LastSuccess.IsZero() && h.LastAttempt.IsZero():
 			never = append(never, string(h.Source))
+		case h.LastSuccess.IsZero():
+			// Tried, and still holding nothing. This is the least
+			// healthy a source gets: a degraded one at least has an old
+			// board behind it, and this one has no board at all.
+			degraded = append(degraded, string(h.Source))
 		case !h.Healthy:
 			degraded = append(degraded, string(h.Source))
 		case h.Freshness == FreshnessStale:
 			degraded = append(degraded, string(h.Source)+" (stale)")
 		}
 	}
-	// A source that has never been read yet is not a failure on its own:
-	// the first Snapshot call populates it. Report it, but do not call
-	// the plane unhealthy until a read has actually failed.
+	// A source nothing has read yet is not a failure on its own: the
+	// scheduler's first read populates it. Report it, but do not call the
+	// plane unhealthy until a read has actually failed. A source that has
+	// been read and produced nothing is not this case, and treating it as
+	// one reported a credential that could read nothing at all as green.
 	if len(degraded) == 0 {
 		if len(never) > 0 {
 			return true, "not yet read: " + strings.Join(never, ", ")

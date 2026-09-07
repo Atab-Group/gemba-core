@@ -296,3 +296,75 @@ func TestSourceConfig_NormalizeDefaults(t *testing.T) {
 		t.Errorf("display = %q, want the org name", cfg.Display)
 	}
 }
+
+// blockingClient holds a fetch open until the test releases it, which is
+// how the health surface can be asked a question while a crawl is in
+// flight.
+type blockingClient struct {
+	source  SourceID
+	issues  []Issue
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingClient) SourceID() SourceID { return b.source }
+
+func (b *blockingClient) FetchIssues(context.Context, FetchOptions) ([]Issue, error) {
+	close(b.entered)
+	<-b.release
+	return b.issues, nil
+}
+
+func (b *blockingClient) FetchIssue(context.Context, IssueRef) (Issue, error) {
+	return Issue{}, core.NewAdaptorError(core.KindSessionNotFound, "not used")
+}
+
+func (b *blockingClient) Ping(context.Context) error { return nil }
+
+// A refresh spends nearly all of its time inside the client. Holding the
+// state lock across that call makes every reader wait out the network,
+// and a full crawl of a large source runs for the better part of a
+// minute. The health surface is the one that must not block: it exists
+// to answer while a source is unwell, and an operator asking why the
+// board is empty would instead get a request that hangs until the crawl
+// it is asking about finishes.
+func TestCache_AReadInFlightDoesNotBlockTheHealthSurface(t *testing.T) {
+	cfg := DemoSourceConfig()
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	client := &blockingClient{
+		source:  cfg.ID,
+		issues:  DemoIssues(),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	c := NewCache(cfg, client)
+
+	done := make(chan error, 1)
+	go func() { done <- c.Refresh(context.Background()) }()
+
+	<-client.entered // the fetch is now in flight
+
+	answered := make(chan Health, 1)
+	go func() { answered <- c.Health() }()
+
+	select {
+	case h := <-answered:
+		// The condition is reported from before this read landed, which
+		// is the honest answer while it is still running.
+		if h.Source != cfg.ID {
+			t.Errorf("health names %q, want %q", h.Source, cfg.ID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Health blocked on a fetch that had not returned yet")
+	}
+
+	close(client.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := c.Health(); got.Items != len(DemoIssues()) {
+		t.Errorf("items = %d, want %d", got.Items, len(DemoIssues()))
+	}
+}

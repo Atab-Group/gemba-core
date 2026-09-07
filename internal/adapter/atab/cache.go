@@ -49,6 +49,13 @@ type Cache struct {
 	client Client
 	now    func() time.Time
 
+	// refreshMu serialises refreshes. It is separate from mu because a
+	// refresh spends most of its time inside the client, and holding the
+	// state lock across that call would make every reader wait out the
+	// network: a 45 second crawl would stall the health surface, which
+	// exists precisely to be answerable while a source is unwell.
+	refreshMu sync.Mutex
+
 	mu            sync.Mutex
 	issues        map[IssueRef]Issue
 	lastSuccess   time.Time
@@ -76,13 +83,10 @@ func NewCache(cfg SourceConfig, client Client) *Cache {
 // snapshot and no error, because the caller can render it and the
 // freshness marker says not to trust it as current.
 func (c *Cache) Snapshot(ctx context.Context) (Snapshot, error) {
+	c.refreshIfDue(ctx)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	now := c.now().UTC()
-	if c.refreshDue(now) {
-		c.refreshLocked(ctx, now)
-	}
 	if len(c.issues) == 0 && c.lastSuccess.IsZero() {
 		if c.lastErr != nil {
 			return Snapshot{Source: c.cfg.ID, Freshness: FreshnessUnknown}, c.lastErr
@@ -91,12 +95,56 @@ func (c *Cache) Snapshot(ctx context.Context) (Snapshot, error) {
 	return c.snapshotLocked(), nil
 }
 
+// refreshIfDue refreshes when the previous attempt is older than the
+// source's RefreshInterval. The due check is repeated under refreshMu so
+// that two callers arriving together produce one fetch rather than two.
+func (c *Cache) refreshIfDue(ctx context.Context) {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+
+	c.mu.Lock()
+	due := c.refreshDue(c.now().UTC())
+	c.mu.Unlock()
+	if !due {
+		return
+	}
+	// The error is recorded on the cache and read back by the caller
+	// through the snapshot and the health surface. A refresh failure is
+	// not a Snapshot failure: the last good snapshot keeps serving.
+	_ = c.refresh(ctx, c.now().UTC())
+}
+
 // Refresh forces a refresh regardless of the interval and reports
 // whether it succeeded.
 func (c *Cache) Refresh(ctx context.Context) error {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	return c.refresh(ctx, c.now().UTC())
+}
+
+// refresh reads the source and applies the result. The caller holds
+// refreshMu; the state lock is taken twice, around the client call and
+// never across it.
+func (c *Cache) refresh(ctx context.Context, now time.Time) error {
+	c.mu.Lock()
+	c.lastAttempt = now
+	full := c.lastFullFetch.IsZero() ||
+		len(c.issues) == 0 ||
+		now.Sub(c.lastFullFetch) >= fullRefreshEvery
+	opts := FetchOptions{
+		Repos:         c.cfg.Repos,
+		IncludeClosed: true,
+	}
+	if !full {
+		opts.UpdatedSince = c.lastSuccess.Add(-refreshOverlap)
+	}
+	c.mu.Unlock()
+
+	fetched, err := c.client.FetchIssues(ctx, opts)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.refreshLocked(ctx, c.now().UTC())
+	c.applyLocked(fetched, err, full, now)
 	return c.lastErr
 }
 
@@ -127,23 +175,9 @@ func (c *Cache) refreshDue(now time.Time) bool {
 	return now.Sub(c.lastAttempt) >= c.cfg.RefreshInterval
 }
 
-func (c *Cache) refreshLocked(ctx context.Context, now time.Time) {
-	c.lastAttempt = now
-
-	full := c.lastFullFetch.IsZero() ||
-		len(c.issues) == 0 ||
-		now.Sub(c.lastFullFetch) >= fullRefreshEvery
-
-	opts := FetchOptions{
-		Repos:         c.cfg.Repos,
-		IncludeClosed: true,
-	}
-	if !full {
-		opts.UpdatedSince = c.lastSuccess.Add(-refreshOverlap)
-	}
-
-	fetched, err := c.client.FetchIssues(ctx, opts)
-
+// applyLocked folds one fetch's outcome into the cache. The caller holds
+// mu and decided full before the fetch ran.
+func (c *Cache) applyLocked(fetched []Issue, err error, full bool, now time.Time) {
 	// A partial fetch is a non-nil error alongside a non-empty result:
 	// some repositories in the source answered and others did not. It is
 	// handled apart from both success and failure because treating it as

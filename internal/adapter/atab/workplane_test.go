@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -261,5 +262,50 @@ func TestWorkPlane_AssigneeFilter(t *testing.T) {
 		if it.Assignee == nil || it.Assignee.ID != want {
 			t.Errorf("item %q assignee = %+v", it.ID, it.Assignee)
 		}
+	}
+}
+
+// A source whose reads have all failed is not the same as a source
+// nothing has got to yet, and the probe must not report the first as the
+// second. It used to: the never-read branch was decided on the absence
+// of a success alone, so a credential that could read nothing at all sat
+// behind a green health check for as long as the process ran.
+func TestProbe_ASourceWhoseFirstReadFailedIsNotHealthy(t *testing.T) {
+	reg := NewRegistry()
+	client := NewFixtureClient(DemoSourceID, DemoIssues())
+	if err := reg.Add(DemoSourceConfig(), client); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	wp := New(reg, core.TransportAPI)
+
+	// Nothing has been read yet, and nothing has failed yet.
+	ok, reason := wp.Probe(t.Context())
+	if !ok {
+		t.Errorf("a source nobody has read yet reports unhealthy: %s", reason)
+	}
+	if !strings.Contains(reason, "not yet read") {
+		t.Errorf("reason = %q, want it to say the source has not been read", reason)
+	}
+
+	client.SetFailure(core.NewAdaptorError(core.KindRateLimited, "throttled"))
+	if err := reg.RefreshSource(t.Context(), DemoSourceID); err == nil {
+		t.Fatal("the read was meant to fail")
+	}
+
+	ok, reason = wp.Probe(t.Context())
+	if ok {
+		t.Errorf("a source holding nothing after a failed read reports healthy: %q", reason)
+	}
+	if !strings.Contains(reason, string(DemoSourceID)) {
+		t.Errorf("reason = %q, want it to name %q", reason, DemoSourceID)
+	}
+
+	// And it recovers once a read lands.
+	client.SetFailure(nil)
+	if err := reg.RefreshSource(t.Context(), DemoSourceID); err != nil {
+		t.Fatalf("recovery read: %v", err)
+	}
+	if ok, reason := wp.Probe(t.Context()); !ok {
+		t.Errorf("still unhealthy after a clean read: %s", reason)
 	}
 }
