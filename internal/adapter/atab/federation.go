@@ -160,6 +160,21 @@ func (r *Registry) Refresh(ctx context.Context) map[SourceID]error {
 	return out
 }
 
+// RefreshSource forces a refresh of one source.
+//
+// It exists so a caller driving sources on a schedule can give each one
+// the interval it declared, rather than reading every source on the
+// shortest interval any of them asked for. An unknown id is a caller
+// error, not a source failure, so it is tagged as validation.
+func (r *Registry) RefreshSource(ctx context.Context, id SourceID) error {
+	e := r.entry(id)
+	if e == nil {
+		return core.NewAdaptorError(core.KindValidation,
+			"atab: no source %q is allowlisted", id)
+	}
+	return e.cache.Refresh(ctx)
+}
+
 // snapshotEntries copies the entry pointers in registration order.
 // Callers must hold at least a read lock.
 func (r *Registry) snapshotEntries() []*sourceEntry {

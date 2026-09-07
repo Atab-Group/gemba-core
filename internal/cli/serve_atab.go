@@ -206,7 +206,7 @@ func registerATABWorkPlane(
 		"read_only", manifest.ReadOnly,
 		"sources", strings.Join(names, ","))
 
-	warmATABSources(reg, names)
+	driveATABSources(reg)
 
 	return &workPlaneReg{
 		Host:       host,
@@ -217,46 +217,64 @@ func registerATABWorkPlane(
 	}, nil
 }
 
-// warmWindow bounds the startup read of every source. It is generous
+// readWindow bounds one background read of one source. It is generous
 // because it is not on anyone's request path: the only cost of it
-// running long is that the board stays empty a little longer, and the
-// only cost of it being too short is a board that never fills at all.
-const warmWindow = 10 * time.Minute
+// running long is that the board stays stale a little longer, and the
+// only cost of it being too short is a source that never fills at all.
+const readWindow = 10 * time.Minute
 
-// warmATABSources reads every source once, in the background, as soon as
-// the plane is registered.
+// driveATABSources reads every source on its own declared interval, in
+// the background, starting as soon as the plane is registered.
 //
-// Without it the first request to arrive pays for the whole cold crawl,
-// under whatever deadline that request happens to carry. The API's is 30
-// seconds, which a multi-repository org does not finish inside, so the
-// board renders as the prefix of the source that fit and reports itself
-// degraded. Doing the cold read here instead puts it on a context that
-// belongs to the process rather than to a browser tab.
+// The alternative is the cache's own behaviour, which refreshes inside
+// whichever request happens to arrive after the interval lapses. That
+// request carries the API's 30 second deadline, and a cold crawl of a
+// multi-repository org does not finish inside it, so the board renders
+// as the prefix of the source that fit and reports itself degraded.
+// Reading here instead puts every crawl on a context that belongs to
+// the process rather than to a browser tab, and keeps the cache warm
+// enough that no request ever finds it due.
 //
-// It is deliberately fire-and-forget: serving a board that is still
-// filling is better than refusing to listen until GitHub has answered,
-// and a source that fails here is reported by the health probe exactly
-// as it would be on any later refresh.
-func warmATABSources(reg *atab.Registry, names []string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), warmWindow)
+// Each source gets its own loop so a slow one cannot hold up a fast one,
+// and so each is read on the interval it declared rather than on the
+// shortest interval any source asked for.
+//
+// The loop keeps running after a failure, which is the point. A first
+// read that fails leaves the cache empty, and an empty cache is exactly
+// the state whose next refresh is a full crawl. Retrying here means that
+// retry is another background read; giving up would hand it back to the
+// request path, where it cannot finish.
+func driveATABSources(reg *atab.Registry) {
+	for _, id := range reg.Sources() {
+		cfg, ok := reg.Config(id)
+		if !ok {
+			continue
+		}
+		go driveATABSource(reg, id, cfg.RefreshInterval)
+	}
+}
+
+func driveATABSource(reg *atab.Registry, id atab.SourceID, every time.Duration) {
+	read := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), readWindow)
 		defer cancel()
 
 		started := time.Now()
-		errs := reg.Refresh(ctx)
-		if len(errs) > 0 {
-			msgs := make([]string, 0, len(errs))
-			for _, err := range errs {
-				msgs = append(msgs, err.Error())
-			}
-			slog.Warn("atab: initial source read did not complete cleanly",
-				"sources", strings.Join(names, ","),
-				"took", time.Since(started).Round(time.Second),
-				"errors", strings.Join(msgs, "; "))
+		err := reg.RefreshSource(ctx, id)
+		took := time.Since(started).Round(time.Second)
+		if err != nil {
+			slog.Warn("atab: source read did not complete cleanly",
+				"source", string(id), "took", took, "err", err)
 			return
 		}
-		slog.Info("atab: sources warmed",
-			"sources", strings.Join(names, ","),
-			"took", time.Since(started).Round(time.Second))
-	}()
+		slog.Info("atab: source read", "source", string(id), "took", took)
+	}
+
+	read()
+
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for range ticker.C {
+		read()
+	}
 }

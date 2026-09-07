@@ -211,13 +211,21 @@ which costs the whole refresh rather than one repository. Results are
 flattened in the order the source declares its repositories, so the
 board does not reshuffle when a different repository answers first.
 
-The first read of every source happens in the background as soon as the
-plane is registered, on a context that belongs to the process rather
-than to a browser tab. A cold crawl of nine repositories takes about 45
-seconds, which no HTTP request can wait for, so without this the board
-served whatever prefix of the org fit inside one request. While that
-first read is in flight the board is empty and its freshness reads
-`unknown`; it fills when the read lands.
+`gemba serve --atab` drives every source itself rather than leaving the
+cache to refresh inside whichever request arrives after the interval
+lapses. Each source gets its own loop on its own `refresh_interval`,
+reading on a context that belongs to the process rather than to a
+browser tab. A cold crawl of nine repositories takes about 45 seconds,
+which no HTTP request can wait for, so without this the board served
+whatever prefix of the org fit inside one request. While the first read
+is in flight the board is empty and its freshness reads `unknown`; it
+fills when the read lands.
+
+The loop keeps running after a failure. A first read that fails leaves
+the cache empty, and an empty cache is exactly the state whose next
+refresh is a full crawl, so giving up would hand that crawl back to the
+request path where it cannot finish. A throttled source retries on its
+next interval and the board fills then.
 
 ## Running it as a service
 

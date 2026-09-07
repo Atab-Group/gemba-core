@@ -349,3 +349,79 @@ func TestRegistry_HealthFreshnessTracksTheBudget(t *testing.T) {
 		}
 	}
 }
+
+// RefreshSource exists so a scheduler can read each source on the
+// interval that source declared. Reading one must not read the others,
+// or a source with a two-minute budget would drag every other source
+// onto its schedule and spend their rate limit for them.
+func TestRegistry_RefreshSourceReadsOnlyThatSource(t *testing.T) {
+	reg := NewRegistry()
+	primary := NewFixtureClient(DemoSourceID, DemoIssues())
+	secondary := NewFixtureClient(SecondaryDemoSourceID, SecondaryDemoIssues())
+	if err := reg.Add(DemoSourceConfig(), primary); err != nil {
+		t.Fatalf("add primary: %v", err)
+	}
+	if err := reg.Add(SecondaryDemoSourceConfig(), secondary); err != nil {
+		t.Fatalf("add secondary: %v", err)
+	}
+
+	if err := reg.RefreshSource(t.Context(), DemoSourceID); err != nil {
+		t.Fatalf("RefreshSource: %v", err)
+	}
+	if got := primary.Calls(); got != 1 {
+		t.Errorf("primary calls = %d, want 1", got)
+	}
+	if got := secondary.Calls(); got != 0 {
+		t.Errorf("secondary calls = %d, want 0; refreshing one source read another", got)
+	}
+}
+
+// A source that has never been read is the state whose next refresh is a
+// full crawl, so a failed read has to leave it retryable rather than
+// stuck. The scheduler retries in the background; if a failure poisoned
+// the source, that retry would never repopulate it and the crawl would
+// fall back to whichever request arrived next.
+func TestRegistry_RefreshSourceStaysRetryableAfterAFailure(t *testing.T) {
+	reg := NewRegistry()
+	client := NewFixtureClient(DemoSourceID, DemoIssues())
+	if err := reg.Add(DemoSourceConfig(), client); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	client.SetFailure(core.NewAdaptorError(core.KindRateLimited, "throttled"))
+	if err := reg.RefreshSource(t.Context(), DemoSourceID); err == nil {
+		t.Fatal("a throttled read must report the failure")
+	}
+	if ok, _ := reg.Healthy(); ok {
+		t.Error("a source that has never been read reports healthy")
+	}
+
+	client.SetFailure(nil)
+	if err := reg.RefreshSource(t.Context(), DemoSourceID); err != nil {
+		t.Fatalf("the retry after a cleared failure: %v", err)
+	}
+	if ok, reason := reg.Healthy(); !ok {
+		t.Errorf("source still unhealthy after a clean read: %s", reason)
+	}
+	for _, h := range reg.Health() {
+		if h.Items != len(DemoIssues()) {
+			t.Errorf("%s holds %d items, want %d", h.Source, h.Items, len(DemoIssues()))
+		}
+	}
+}
+
+// An id the allowlist does not carry is a caller error, not a source
+// that failed. Reporting it as a source failure would make a typo in a
+// scheduler look like GitHub being down.
+func TestRegistry_RefreshSourceRejectsAnUnknownID(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add(DemoSourceConfig(), NewFixtureClient(DemoSourceID, nil)); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	err := reg.RefreshSource(t.Context(), "not-allowlisted")
+	ae := core.AsAdaptorError(err)
+	if ae == nil || ae.Kind != core.KindValidation {
+		t.Fatalf("error = %v, want a tagged validation error", err)
+	}
+}
