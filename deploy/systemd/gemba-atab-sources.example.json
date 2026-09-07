@@ -1,0 +1,23 @@
+{
+  "sources": [
+    {
+      "id": "atab-group",
+      "org": "Atab-Group",
+      "project_number": 1,
+      "display": "Atab Group Tasks",
+      "authority": "canonical",
+      "refresh_interval": "120s",
+      "stale_after": "15m",
+      "repos": [
+        "Product-Seela",
+        "Product-Klosa",
+        "Product-Snap-a-slip",
+        "Consulting-Arbor",
+        "Consulting-AxTeam",
+        "ATAB-Website",
+        "BAMR-bot",
+        "goalpha"
+      ]
+    }
+  ]
+}

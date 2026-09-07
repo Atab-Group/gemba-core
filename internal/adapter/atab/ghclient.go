@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -127,11 +126,13 @@ func (c *GHClient) FetchIssues(ctx context.Context, opts FetchOptions) ([]Issue,
 	}
 
 	var out []Issue
-	var failures []string
+	var failures []error
+	var failedRepos []string
 	for _, repo := range repos {
 		issues, err := c.fetchRepoIssues(ctx, repo, opts)
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", repo, err))
+			failures = append(failures, err)
+			failedRepos = append(failedRepos, repo)
 			continue
 		}
 		out = append(out, issues...)
@@ -140,11 +141,48 @@ func (c *GHClient) FetchIssues(ctx context.Context, opts FetchOptions) ([]Issue,
 		}
 	}
 	if len(failures) > 0 && len(out) == 0 {
-		return nil, core.NewAdaptorError(core.KindRequestFailed,
-			"atab: every repository in source %q failed: %s",
-			c.cfg.ID, strings.Join(failures, "; "))
+		return nil, aggregateFailure(c.cfg.ID, failedRepos, failures)
 	}
 	return out, nil
+}
+
+// aggregateFailure folds per-repository failures into one tagged error.
+//
+// The kind is preserved when every repository failed the same way. That
+// matters because callers branch on Kind and Retryable, never on the
+// message: a whole source throttled has to stay rate_limited so the
+// runtime backs off, rather than flattening into a generic
+// request_failed that invites an immediate retry into the same wall.
+// Mixed causes have no single honest kind, so they land on
+// request_failed with each distinct cause named once.
+func aggregateFailure(source SourceID, repos []string, errs []error) error {
+	kinds := map[core.ErrorKind]int{}
+	for _, err := range errs {
+		if ae := core.AsAdaptorError(err); ae != nil {
+			kinds[ae.Kind]++
+		} else {
+			kinds[core.KindRequestFailed]++
+		}
+	}
+	kind := core.KindRequestFailed
+	if len(kinds) == 1 {
+		for k := range kinds {
+			kind = k
+		}
+	}
+	seen := map[string]bool{}
+	var causes []string
+	for _, err := range errs {
+		msg := err.Error()
+		if seen[msg] {
+			continue
+		}
+		seen[msg] = true
+		causes = append(causes, msg)
+	}
+	return core.NewAdaptorError(kind,
+		"atab: every repository in source %q failed (%s): %s",
+		source, strings.Join(repos, ", "), strings.Join(causes, "; "))
 }
 
 func (c *GHClient) fetchRepoIssues(ctx context.Context, repo string, opts FetchOptions) ([]Issue, error) {

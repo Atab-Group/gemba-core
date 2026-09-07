@@ -1,0 +1,44 @@
+[Unit]
+# Read-only GitHub / Projects v2 dashboard. Runs on its own: it does not
+# depend on, start, or stop any other service, and it holds no state
+# that another unit needs.
+Description=Gemba ATAB dashboard (read-only GitHub / Projects v2 projection)
+Documentation=https://github.com/GembaCore/gemba-core/blob/main/docs/adaptors/atab.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/gemba-atab
+# gh must be on PATH: the adaptor reads GitHub through the authenticated
+# gh CLI and never handles a token itself.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin
+ExecStart=%h/.local/share/gemba-atab/bin/gemba serve \
+  --atab \
+  --atab-sources %h/.config/gemba-atab/sources.json \
+  --listen 127.0.0.1 \
+  --port 7676 \
+  --quiet
+
+Restart=on-failure
+RestartSec=10s
+# Five restarts inside five minutes means the failure is not transient,
+# so stop trying and leave the unit failed where it can be seen.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# The dashboard only ever reads. Nothing it does needs to write outside
+# its own state directory.
+StateDirectory=gemba-atab
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/gemba-atab
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gemba-atab
+
+[Install]
+WantedBy=default.target

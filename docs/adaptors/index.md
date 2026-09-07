@@ -18,6 +18,8 @@ the SPA renders only what the manifest exposes.
 
 - **[Beads](beads)** — the out-of-the-box WorkPlane adaptor (`bd` CLI
   + direct Dolt SQL modes). [Conformance report](beads-conformance).
+- **[ATAB](atab)** — read-only WorkPlane over GitHub Issues and
+  Projects v2, federated across several org / project / repo sources.
 - **[Native](native)** — the bundled OrchestrationPlane that drives
   tmux / iTerm2 / Terminal.app sessions directly without an external
   daemon.
