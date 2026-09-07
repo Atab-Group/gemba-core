@@ -20,23 +20,23 @@ const (
 	StatusInReview   = "In Review"
 	StatusDone       = "Done"
 
-	// StatusOpen — an open issue with no row on the board. Real and
+	// StatusOpen: an open issue with no row on the board. Real and
 	// common: an issue filed but not yet triaged onto the project.
 	StatusOpen = "open"
-	// StatusClosedCompleted — closed with GitHub state_reason
+	// StatusClosedCompleted: closed with GitHub state_reason
 	// COMPLETED, and not on the board.
 	StatusClosedCompleted = "closed"
-	// StatusClosedNotPlanned — closed with state_reason NOT_PLANNED.
+	// StatusClosedNotPlanned: closed with state_reason NOT_PLANNED.
 	// This is the one token that maps to the canceled bucket.
 	StatusClosedNotPlanned = "not_planned"
 
-	// StatusUnknown — the projection could not determine a status. The
+	// StatusUnknown: the projection could not determine a status. The
 	// board row is missing a Status value the source's mapping knows,
 	// or GitHub returned a state token this adaptor does not recognise.
 	// Emitted rather than guessed: a card in the wrong lane is worse
 	// than a card that says it does not know.
 	StatusUnknown = "unknown"
-	// StatusStale — the source could not be refreshed inside its
+	// StatusStale: the source could not be refreshed inside its
 	// freshness budget and no prior status was ever observed for this
 	// item. An item with a prior status keeps it and is flagged through
 	// the atab_freshness field instead.
@@ -93,7 +93,7 @@ const (
 // no core equivalent. blocked_by and the native parent link both map
 // onto core edges and so are not extensions.
 const (
-	// EdgeDiscoveredFrom — provenance: the issue whose work surfaced
+	// EdgeDiscoveredFrom is provenance: the issue whose work surfaced
 	// this one. Directed, no inverse, never blocking.
 	EdgeDiscoveredFrom = "atab:discovered_from"
 )
@@ -163,7 +163,7 @@ func Manifest(transport core.Transport) core.CapabilityManifest {
 		ReadySetQuery:         false,
 		VersioningTransport:   []core.VersioningTransport{core.VersioningNone},
 		// Read-only: the adaptor never writes, so it never races another
-		// writer. Optimistic is the honest declaration — GitHub itself
+		// writer. Optimistic is the honest declaration: GitHub itself
 		// resolves concurrent writes that way for the writers upstream.
 		ConcurrencyModel:       core.ConcurrencyOptimistic,
 		AgentSessionDecoupling: true,

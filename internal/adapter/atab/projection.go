@@ -14,12 +14,12 @@ import (
 type Freshness string
 
 const (
-	// FreshnessFresh — the snapshot is inside the source's budget.
+	// FreshnessFresh: the snapshot is inside the source's budget.
 	FreshnessFresh Freshness = "fresh"
-	// FreshnessStale — the snapshot is past its budget and a refresh
+	// FreshnessStale: the snapshot is past its budget and a refresh
 	// has not succeeded. Values are last-known, not current.
 	FreshnessStale Freshness = "stale"
-	// FreshnessUnknown — nothing has ever been observed for the source.
+	// FreshnessUnknown: nothing has ever been observed for the source.
 	FreshnessUnknown Freshness = "unknown"
 )
 

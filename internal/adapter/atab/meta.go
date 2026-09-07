@@ -18,12 +18,12 @@ const MetaSchemaVersion = 5
 type Autonomy string
 
 const (
-	// AutonomyAuto — tier A, the full bot loop may build and merge.
+	// AutonomyAuto: tier A, the full bot loop may build and merge.
 	AutonomyAuto Autonomy = "auto"
-	// AutonomyPR — tier B, a bot builds and a human merges. The default
+	// AutonomyPR: tier B, a bot builds and a human merges. The default
 	// for an absent key.
 	AutonomyPR Autonomy = "pr"
-	// AutonomyHuman — tier C, humans only. Also the fail-safe an
+	// AutonomyHuman: tier C, humans only. Also the fail-safe an
 	// out-of-enum value normalises to.
 	AutonomyHuman Autonomy = "human"
 )
@@ -40,7 +40,7 @@ func NormalizeAutonomy(raw string) (Autonomy, string) {
 		return Autonomy(raw), ""
 	default:
 		return AutonomyHuman, fmt.Sprintf(
-			"invalid autonomy %q — treating as human", raw)
+			"invalid autonomy %q, treating as human", raw)
 	}
 }
 
@@ -48,12 +48,12 @@ func NormalizeAutonomy(raw string) (Autonomy, string) {
 type MetaState string
 
 const (
-	// MetaPresent — a well-formed block was parsed.
+	// MetaPresent: a well-formed block was parsed.
 	MetaPresent MetaState = "present"
-	// MetaAbsent — no marker at all. The issue is untracked by
+	// MetaAbsent: no marker at all. The issue is untracked by
 	// automation; readiness skips it rather than guessing.
 	MetaAbsent MetaState = "absent"
-	// MetaMalformed — the marker is there but the YAML behind it does
+	// MetaMalformed: the marker is there but the YAML behind it does
 	// not load, or loads to something other than a mapping. Consumers
 	// skip the issue and warn; they never crash.
 	MetaMalformed MetaState = "malformed"
@@ -79,7 +79,7 @@ type Meta struct {
 	DiscoveredFrom *Edge            `json:"discovered_from,omitempty"`
 	RequiresEnv    []EnvRequirement `json:"requires_env,omitempty"`
 	ScopeClauses   []string         `json:"scope_clauses,omitempty"`
-	// Warnings collects non-fatal readings — an invalid autonomy value,
+	// Warnings collects non-fatal readings: an invalid autonomy value,
 	// a cross-repo edge outside the allowed org. Consumers surface them
 	// on the card rather than dropping the issue.
 	Warnings []string `json:"warnings,omitempty"`
@@ -101,7 +101,7 @@ func (e Edge) CrossRepo() bool { return e.Owner != "" && e.Repo != "" }
 // repo for a same-repo (bare int) entry.
 func (e Edge) Resolve(self IssueRef) IssueRef {
 	if e.CrossRepo() {
-		return IssueRef{Owner: e.Owner, Repo: e.Repo, Number: e.Number}
+		return IssueRef(e)
 	}
 	return IssueRef{Owner: self.Owner, Repo: self.Repo, Number: e.Number}
 }
@@ -216,7 +216,7 @@ func parseEdge(v any, allowedOrg string) (Edge, string) {
 		}
 		if allowedOrg != "" && !strings.EqualFold(m[1], allowedOrg) {
 			return Edge{}, fmt.Sprintf(
-				"cross-repo edge %q names org %q outside the allowed org %q — skipped",
+				"cross-repo edge %q names org %q outside the allowed org %q, skipped",
 				t, m[1], allowedOrg)
 		}
 		n, err := strconv.Atoi(m[3])
@@ -304,7 +304,7 @@ var (
 
 // ParseAcceptanceCriteria extracts the checklist under the body's
 // "## Acceptance Criteria" heading. Returns nil when the section is
-// absent or holds no checklist items — an issue with no criteria is a
+// absent or holds no checklist items; an issue with no criteria is a
 // real state the board must show, not a parse failure.
 func ParseAcceptanceCriteria(body string) []Criterion {
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")

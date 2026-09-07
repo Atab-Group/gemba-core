@@ -60,7 +60,7 @@ func TestATABWorkPlaneConformance(t *testing.T) {
 }
 
 // sessionDeathRecovery asserts R6: a worker dying mid-task loses nothing.
-// The issue's own state — its criteria, its board row, its evidence —
+// The issue's own state (its criteria, its board row, its evidence)
 // is unchanged by the worker's disappearance, and only the lease lapses.
 func sessionDeathRecovery(impl core.WorkPlane, client *atab.FixtureClient, reg *atab.Registry) error {
 	ctx := context.Background()

@@ -14,8 +14,8 @@ import (
 // [core.WorkItemID] this adaptor emits, which is what keeps ids from two
 // sources apart even when both surface "Atab-Group/Product-Seela#42".
 //
-// The grammar is deliberately narrow — lowercase alphanumerics and single
-// interior hyphens — so a source id can never contain the "/" or "~"
+// The grammar is deliberately narrow (lowercase alphanumerics and single
+// interior hyphens) so a source id can never contain the "/" or "~"
 // separators the id scheme relies on.
 type SourceID string
 
@@ -82,7 +82,7 @@ func (r IssueRef) Validate() error {
 // WorkItemID renders the globally collision-safe id for ref inside
 // source. Shape: "<source>/<owner>~<repo>/<number>", which satisfies the
 // core "<workspace>/<repo>/<native-id>" contract while keeping the owner
-// visible — two sources may both carry a repo called "platform", and two
+// visible: two sources may both carry a repo called "platform", and two
 // orgs may both carry issue #42.
 func (r IssueRef) WorkItemID(source SourceID) core.WorkItemID {
 	return core.WorkItemID(fmt.Sprintf("%s/%s%s%s/%d",

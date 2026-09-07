@@ -55,14 +55,14 @@ func TestCache_HonoursTheRefreshInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	if client.Calls() != 1 {
-		t.Fatalf("calls = %d, want 1 — the second read was inside the interval", client.Calls())
+		t.Fatalf("calls = %d, want 1; the second read was inside the interval", client.Calls())
 	}
 	*clock = clock.Add(DefaultRefreshInterval)
 	if _, err := c.Snapshot(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if client.Calls() != 2 {
-		t.Fatalf("calls = %d, want 2 — the interval had elapsed", client.Calls())
+		t.Fatalf("calls = %d, want 2; the interval had elapsed", client.Calls())
 	}
 }
 

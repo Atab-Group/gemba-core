@@ -218,7 +218,7 @@ func TestProjection_AssigneeIsDistinctFromLease(t *testing.T) {
 		t.Error("the assignee survives the lease expiring")
 	}
 	if r := readiness(t, dead); r != ReadyReady {
-		t.Errorf("readiness = %q, want ready — an expired lease releases the issue", r)
+		t.Errorf("readiness = %q, want ready; an expired lease releases the issue", r)
 	}
 }
 
@@ -241,7 +241,7 @@ func TestProjection_EvidenceFromPRLocalCIVerifierAndChecks(t *testing.T) {
 		t.Errorf("local CI payload = %v, want all_green", ci.Payload)
 	}
 	if ci := bySource[EvidenceSourceLocalCI]; ci.Payload["stale"] != false {
-		t.Errorf("local CI stale = %v, want false — the report matches the head", ci.Payload["stale"])
+		t.Errorf("local CI stale = %v, want false; the report matches the head", ci.Payload["stale"])
 	}
 	if v := bySource[EvidenceSourceVerifier]; v.Payload["overall_verdict"] != "PASS" {
 		t.Errorf("verifier verdict = %v, want PASS", v.Payload["overall_verdict"])

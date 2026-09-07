@@ -16,7 +16,7 @@ import (
 // It is opt-in: set ATAB_LIVE=1 to run it. Two reasons, both practical.
 // It needs an authenticated gh and a network, so it cannot be part of
 // the default lane. And it spends the org's shared GitHub budget, which
-// other automation in the same org is spending at the same time — a
+// other automation in the same org is spending at the same time, and a
 // suite that quietly competes for that budget is a suite that makes
 // other things fail.
 //

@@ -52,7 +52,7 @@ type Issue struct {
 }
 
 // ParentRef is the native parent link plus the state the readiness rules
-// need — an issue whose parent is closed is an orphan and drops out.
+// need: an issue whose parent is closed is an orphan and drops out.
 type ParentRef struct {
 	Ref   IssueRef `json:"ref"`
 	Title string   `json:"title,omitempty"`
@@ -159,7 +159,7 @@ type Client interface {
 	SourceID() SourceID
 
 	// FetchIssues returns issues matching opts. Implementations return a
-	// tagged *core.AdaptorError on failure — KindRequestFailed for
+	// tagged *core.AdaptorError on failure: KindRequestFailed for
 	// transport trouble, KindRateLimited when GitHub throttles,
 	// KindCapabilityDenied when the token cannot see the source.
 	FetchIssues(ctx context.Context, opts FetchOptions) ([]Issue, error)

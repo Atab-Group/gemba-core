@@ -191,7 +191,7 @@ func TestRegistry_CrossSourceDependencyFailsClosed(t *testing.T) {
 		t.Fatalf("items = %d, want 1", len(items))
 	}
 	if got := items[0].Custom[FieldKeyReadiness]; got != string(ReadyBlocked) {
-		t.Fatalf("readiness = %v, want blocked — the cross-repo target is unresolvable", got)
+		t.Fatalf("readiness = %v, want blocked; the cross-repo target is unresolvable", got)
 	}
 	reason, _ := items[0].Custom[FieldKeyReadyReason].(string)
 	if !strings.Contains(reason, "cannot read") {

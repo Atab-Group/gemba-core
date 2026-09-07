@@ -122,7 +122,7 @@ func commentTime(c Comment) time.Time {
 // Four kinds land here, in the order the reviewer reads them:
 //
 //  1. the pull request itself, as a URL,
-//  2. its local-CI report, as a test result — the org's primary test
+//  2. its local-CI report, as a test result, the org's primary test
 //     evidence, because testing is local rather than through Checks,
 //  3. its verifier verdict, when one was published,
 //  4. the GitHub check runs, as one test result per run.
@@ -174,7 +174,7 @@ func CollectEvidence(source SourceID, issue Issue) []core.Evidence {
 			}
 			summary := fmt.Sprintf("local CI %s (%d command(s))", verdict, len(report.Commands))
 			if stale {
-				summary += fmt.Sprintf("; stale — ran against %s, head is %s",
+				summary += fmt.Sprintf("; stale, ran against %s, head is %s",
 					shortSHA(report.HeadSHA), shortSHA(pr.HeadSHA))
 			}
 			out = append(out, core.Evidence{

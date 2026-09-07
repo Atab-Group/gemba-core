@@ -15,43 +15,43 @@ import (
 type Readiness string
 
 const (
-	// ReadyReady — every gate passed. The item is pickable.
+	// ReadyReady: every gate passed. The item is pickable.
 	ReadyReady Readiness = "ready"
-	// ReadyDone — closed, or sitting in the board's Done column.
+	// ReadyDone: closed, or sitting in the board's Done column.
 	ReadyDone Readiness = "done"
-	// ReadyNotWorkable — the type is not workable: an epic that still
+	// ReadyNotWorkable: the type is not workable: an epic that still
 	// has open children, or a type the board does not mark workable.
 	ReadyNotWorkable Readiness = "not_workable"
-	// ReadyParked — a needs-human-class label parks the item on the
+	// ReadyParked: a needs-human-class label parks the item on the
 	// human side until a person clears it.
 	ReadyParked Readiness = "parked"
-	// ReadyUntracked — no atab-meta block, so automation does not track
+	// ReadyUntracked: no atab-meta block, so automation does not track
 	// it. Shown, never dispatched.
 	ReadyUntracked Readiness = "untracked"
-	// ReadyMalformed — the atab-meta block does not parse.
+	// ReadyMalformed: the atab-meta block does not parse.
 	ReadyMalformed Readiness = "malformed"
-	// ReadyInFlight — already being worked: the board says In Progress
+	// ReadyInFlight: already being worked: the board says In Progress
 	// or In Review, or a worker holds a fresh lease.
 	ReadyInFlight Readiness = "in_flight"
-	// ReadyPROpen — already built; an open pull request links the issue
+	// ReadyPROpen: already built; an open pull request links the issue
 	// and it is waiting to merge.
 	ReadyPROpen Readiness = "pr_open"
-	// ReadyCycle — the item sits in a blocked_by cycle. Reported apart
+	// ReadyCycle: the item sits in a blocked_by cycle. Reported apart
 	// from plain blocked because a cycle needs a human to break it.
 	ReadyCycle Readiness = "cycle"
-	// ReadyBlocked — at least one blocked_by edge is unresolved.
+	// ReadyBlocked: at least one blocked_by edge is unresolved.
 	ReadyBlocked Readiness = "blocked"
-	// ReadyOrphan — the native parent issue is closed, so the item's
+	// ReadyOrphan: the native parent issue is closed, so the item's
 	// context is gone.
 	ReadyOrphan Readiness = "orphan"
-	// ReadyHumanOnly — autonomy is human, so no bot may claim it. It is
+	// ReadyHumanOnly: autonomy is human, so no bot may claim it. It is
 	// still ready work for a person, and is reported as its own state
 	// rather than folded into blocked.
 	ReadyHumanOnly Readiness = "human_only"
-	// ReadyReconcile — a drained epic: open, type epic, unassigned, and
+	// ReadyReconcile: a drained epic: open, type epic, unassigned, and
 	// every native sub-issue closed. Its work is reconciliation.
 	ReadyReconcile Readiness = "reconcile"
-	// ReadyUnknown — the projection could not decide, because the
+	// ReadyUnknown: the projection could not decide, because the
 	// snapshot behind it is stale or the source is unhealthy. Never a
 	// silent "ready".
 	ReadyUnknown Readiness = "unknown"
@@ -102,13 +102,13 @@ func TypeOf(labels []string, meta Meta) string {
 type BlockerState string
 
 const (
-	// BlockerOpen — the target exists and is still open: the edge holds.
+	// BlockerOpen: the target exists and is still open: the edge holds.
 	BlockerOpen BlockerState = "open"
-	// BlockerResolved — the target is closed, is in the board's Done
+	// BlockerResolved: the target is closed, is in the board's Done
 	// column, or does not exist. A typo must not deadlock the queue, so
 	// an absent target resolves.
 	BlockerResolved BlockerState = "resolved"
-	// BlockerUnknown — the target lives in a source this deployment
+	// BlockerUnknown: the target lives in a source this deployment
 	// cannot read. The edge is treated as holding and the item is
 	// reported blocked with an explicit reason, never quietly ready.
 	// This is the fail-closed direction Stage 2 depends on.
@@ -210,10 +210,10 @@ func EvaluateReadiness(in ReadinessInput) ReadinessResult {
 	drained := isDrainedEpic(itemType, in.Assignees, in.SubIssues)
 	if _, workable := WorkableTypes[itemType]; !workable && !drained {
 		reason := fmt.Sprintf("type %q is not workable", itemType)
-		switch {
-		case itemType == "":
+		switch itemType {
+		case "":
 			reason = "no issue type declared"
-		case itemType == EpicType:
+		case EpicType:
 			reason = "epic with open sub-issues; work its children instead"
 		}
 		if in.Meta.State == MetaAbsent {
@@ -328,7 +328,7 @@ func unresolvedBlockers(in ReadinessInput) ([]IssueRef, string) {
 
 // isDrainedEpic reports the reconcile case: an open, unassigned epic
 // whose every native sub-issue is closed. An epic with no sub-issues at
-// all has not drained — it was never filled.
+// all has not drained; it was never filled.
 func isDrainedEpic(itemType string, assignees []string, subs []SubIssueRef) bool {
 	if itemType != EpicType || len(assignees) > 0 || len(subs) == 0 {
 		return false

@@ -10,10 +10,10 @@
 //
 // The projection has three layers, built in three stages:
 //
-//	Stage 0 — the WorkPlane contract itself: capability manifest, the
+//	Stage 0: the WorkPlane contract itself: capability manifest, the
 //	  qualified WorkItemID scheme, the atab-meta block parser, and a
 //	  single issue rendered onto core.WorkItem.
-//	Stage 1 — the full Atab-Group Project #1 projection: board Status
+//	Stage 1: the full Atab-Group Project #1 projection: board Status
 //	  and Priority, atab-meta type/autonomy plus the acceptance-criteria
 //	  checklist, GitHub-native parent/sub-issue edges, blocked_by and
 //	  discovered_from edges, readiness derived from the same rules as
@@ -21,7 +21,7 @@
 //	  lease, evidence drawn from pull requests, local-CI runs, verifier
 //	  verdicts and check runs, explicit stale and unknown states, and a
 //	  snapshot cache with incremental refresh.
-//	Stage 2 — federation across several org / project / repo sources,
+//	Stage 2: federation across several org / project / repo sources,
 //	  each with its own mapping, authority, health and freshness, behind
 //	  an explicit allowlist. See package federation.
 //

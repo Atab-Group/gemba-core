@@ -173,7 +173,7 @@ func DemoIssues() []Issue {
 		// Already built, and the board has not caught up: an open pull
 		// request links the issue while Status still reads Todo. This is
 		// the drift the pr_open gate exists for, and it carries the full
-		// evidence set — local CI, a verifier verdict and check runs.
+		// evidence set: local CI, a verifier verdict and check runs.
 		{
 			Ref:   IssueRef{Owner: "Atab-Group", Repo: "Product-Seela", Number: 306},
 			Title: "Add a currency formatter helper",

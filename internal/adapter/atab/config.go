@@ -76,10 +76,10 @@ type SourceConfig struct {
 type Authority string
 
 const (
-	// AuthorityCanonical — the source owns its issues and its edges may
+	// AuthorityCanonical: the source owns its issues and its edges may
 	// resolve into any other allowlisted source.
 	AuthorityCanonical Authority = "canonical"
-	// AuthorityReference — the source's issues are shown, but its edges
+	// AuthorityReference: the source's issues are shown, but its edges
 	// never block work in another source. The default for a source the
 	// operator has not classified.
 	AuthorityReference Authority = "reference"

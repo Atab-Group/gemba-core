@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/GembaCore/gemba-core/core"
 )
@@ -137,7 +136,7 @@ func (w *WorkPlane) Subscribe(
 
 func (w *WorkPlane) readOnly(op string) error {
 	return core.NewAdaptorError(core.KindReadOnly,
-		"atab: %s is refused — GitHub and the org project board are canonical "+
+		"atab: %s is refused: GitHub and the org project board are canonical "+
 			"and this adaptor is a read-only projection", op)
 }
 
@@ -241,16 +240,15 @@ func toSet(in []string) map[string]struct{} {
 	return out
 }
 
-// ProbeTimeout bounds the health probe so a hung source cannot stall the
-// adaptor health surface.
-const ProbeTimeout = 5 * time.Second
-
-// Probe reports the registry's health as a single line for the /api/adaptors
-// surface.
-func (w *WorkPlane) Probe(ctx context.Context) (bool, string) {
-	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
-	defer cancel()
-
+// Probe reports the registry's health as a single line for the
+// /api/adaptors surface.
+//
+// It reads each source's recorded condition rather than calling GitHub,
+// so it is bounded by construction and needs no timeout of its own: a
+// hung source cannot stall the health surface because the health surface
+// never waits on it. The condition is refreshed by the reads the board
+// is already making.
+func (w *WorkPlane) Probe(context.Context) (bool, string) {
 	healths := w.registry.Health()
 	if len(healths) == 0 {
 		return false, "no sources are allowlisted"

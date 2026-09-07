@@ -98,7 +98,7 @@ func TestNormalizeServeMode_ATABDisablesOrchestration(t *testing.T) {
 	cfg := config.ServeConfig{ATAB: true, Orchestration: "native"}
 	normalizeServeMode(&cfg)
 	if cfg.Orchestration != "none" {
-		t.Fatalf("orchestration = %q, want none — there is nothing to dispatch", cfg.Orchestration)
+		t.Fatalf("orchestration = %q, want none; there is nothing to dispatch", cfg.Orchestration)
 	}
 }
 
