@@ -183,6 +183,10 @@ authentication. Binding a non-loopback interface without --auth is an error.`,
 	cmd.Flags().StringVar(&cfg.ATABFixture, "atab-fixture", "",
 		"path to a recorded ATAB fixture to replay instead of calling GitHub; "+
 			"stands the dashboard up with no network and no credential")
+	cmd.Flags().StringVar(&cfg.ATABStateDir, "atab-state-dir", "",
+		"directory to keep each source's snapshot in between runs, so a restart "+
+			"serves the last board it read (marked stale) rather than nothing "+
+			"while GitHub is unreachable or throttling")
 
 	cmd.Flags().BoolVar(&cfg.BeadsOnly, "beads-only", false,
 		"run as a Beads-only viewer/manager: no project or orchestration required; "+

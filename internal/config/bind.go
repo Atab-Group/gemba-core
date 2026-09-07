@@ -106,6 +106,12 @@ type ServeConfig struct {
 	// the dashboard up with no network and no credential.
 	ATABFixture string
 
+	// ATABStateDir is where each source's snapshot is kept between
+	// processes. Empty disables persistence, and every restart then
+	// starts from an empty cache: a full crawl before the board shows
+	// anything, and nothing at all to show while GitHub is throttling.
+	ATABStateDir string
+
 	// BeadsOnly, when true, runs Gemba as a Beads viewer/manager without
 	// binding an OrchestrationPlane or requiring a project. Mutating Beads
 	// actions append an informational JSONL manifest instead of dispatching

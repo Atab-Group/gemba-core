@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/GembaCore/gemba-core/core"
 )
@@ -34,6 +35,7 @@ import (
 //     that source alone.
 type Registry struct {
 	mu      sync.RWMutex
+	store   SnapshotStore
 	order   []SourceID
 	entries map[SourceID]*sourceEntry
 }
@@ -76,13 +78,52 @@ func (r *Registry) Add(cfg SourceConfig, client Client) error {
 		return core.NewAdaptorError(core.KindValidation,
 			"atab: source id %q is already registered", cfg.ID)
 	}
+	cache := NewCache(cfg, client)
+	if r.store != nil {
+		cache = cache.WithStore(r.store)
+	}
 	r.entries[cfg.ID] = &sourceEntry{
 		cfg:       cfg,
-		cache:     NewCache(cfg, client),
+		cache:     cache,
 		projector: NewProjector(cfg),
 	}
 	r.order = append(r.order, cfg.ID)
 	return nil
+}
+
+// WithStore makes every source added afterwards persist its snapshot,
+// and restore it at construction. Call it before Add.
+//
+// It is registry-wide rather than per-source because the thing it
+// protects against is process-wide: a restart, or a rate limit that
+// stops every source at once.
+func (r *Registry) WithStore(store SnapshotStore) *Registry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.store = store
+	return r
+}
+
+// Restored reports, per source, whether it came up holding a stored
+// snapshot and how old that snapshot is.
+func (r *Registry) Restored() map[SourceID]RestoredSnapshot {
+	r.mu.RLock()
+	entries := r.snapshotEntries()
+	r.mu.RUnlock()
+
+	out := make(map[SourceID]RestoredSnapshot)
+	for _, e := range entries {
+		if ok, at, items := e.cache.Restored(); ok {
+			out[e.cfg.ID] = RestoredSnapshot{ObservedAt: at, Items: items}
+		}
+	}
+	return out
+}
+
+// RestoredSnapshot describes a snapshot recovered from the store.
+type RestoredSnapshot struct {
+	ObservedAt time.Time `json:"observed_at"`
+	Items      int       `json:"items"`
 }
 
 // Allowed reports whether id names an allowlisted source.

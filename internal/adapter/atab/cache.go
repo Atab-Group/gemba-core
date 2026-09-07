@@ -2,6 +2,7 @@ package atab
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -57,6 +58,7 @@ type Cache struct {
 	refreshMu sync.Mutex
 
 	mu            sync.Mutex
+	store         SnapshotStore
 	issues        map[IssueRef]Issue
 	lastSuccess   time.Time
 	lastAttempt   time.Time
@@ -73,6 +75,60 @@ func NewCache(cfg SourceConfig, client Client) *Cache {
 		now:    time.Now,
 		issues: make(map[IssueRef]Issue),
 	}
+}
+
+// WithStore attaches a snapshot store and restores whatever it holds for
+// this source, so the cache starts a process with the board it ended the
+// last one with rather than with nothing.
+//
+// The restored snapshot keeps the instant it was actually read at, which
+// is the whole point: freshness is computed from that instant, so a
+// restored board reads `stale` the moment it is older than the source's
+// budget and says so on every card. Restoring it as `fresh` would
+// present a month-old board as current, which is worse than an empty
+// one.
+//
+// lastAttempt is deliberately left zero. A restore is not a read, so the
+// scheduler still reads immediately at boot; the restored snapshot is
+// what serves until that read lands.
+func (c *Cache) WithStore(store SnapshotStore) *Cache {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.store = store
+	if store == nil {
+		return c
+	}
+	saved, ok, err := store.Load(c.cfg.ID)
+	if err != nil || !ok {
+		return c
+	}
+	if saved.Fingerprint != c.cfg.Fingerprint() {
+		// The stored board answers a different question: a different
+		// org, board or repository set under the same id. Merging it
+		// would put issues on the board that this source no longer
+		// claims, and nothing later removes them.
+		return c
+	}
+	for _, is := range saved.Issues {
+		c.issues[is.Ref] = is
+	}
+	c.lastSuccess = saved.LastSuccess
+	c.lastFullFetch = saved.LastFullFetch
+	return c
+}
+
+// Restored reports whether the cache came up holding a stored snapshot,
+// and how old that snapshot is. It is for the operator log at boot: a
+// board serving restored data looks identical to one serving fresh data
+// unless something says so.
+func (c *Cache) Restored() (bool, time.Time, int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lastSuccess.IsZero() || len(c.issues) == 0 {
+		return false, time.Time{}, 0
+	}
+	return true, c.lastSuccess, len(c.issues)
 }
 
 // Snapshot returns the current snapshot, refreshing first when the
@@ -143,9 +199,48 @@ func (c *Cache) refresh(ctx context.Context, now time.Time) error {
 	fetched, err := c.client.FetchIssues(ctx, opts)
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.applyLocked(fetched, err, full, now)
-	return c.lastErr
+	outcome := c.lastErr
+	toPersist := c.persistableLocked()
+	c.mu.Unlock()
+
+	// Persisting happens outside the state lock. A snapshot of a large
+	// source is several megabytes, and holding the lock across that write
+	// would put a disk flush on the path of every reader for the same
+	// reason the network call is not held across it either.
+	if toPersist != nil {
+		if err := c.store.Save(*toPersist); err != nil {
+			// A board that cannot be saved is still a board. Losing the
+			// stored copy costs one cold crawl after the next restart,
+			// which is not worth failing a refresh that worked.
+			slog.Warn("atab: could not persist the snapshot",
+				"source", string(c.cfg.ID), "err", err)
+		}
+	}
+	return outcome
+}
+
+// persistableLocked returns the snapshot to write, or nil when there is
+// no store or nothing worth storing. The caller holds mu.
+//
+// A cache holding nothing is never written. Persisting an empty board
+// over a good stored one would let a single total failure destroy the
+// copy that exists to survive exactly that.
+func (c *Cache) persistableLocked() *PersistedSnapshot {
+	if c.store == nil || len(c.issues) == 0 || c.lastSuccess.IsZero() {
+		return nil
+	}
+	issues := make([]Issue, 0, len(c.issues))
+	for _, is := range c.issues {
+		issues = append(issues, is)
+	}
+	return &PersistedSnapshot{
+		Source:        c.cfg.ID,
+		Fingerprint:   c.cfg.Fingerprint(),
+		LastSuccess:   c.lastSuccess,
+		LastFullFetch: c.lastFullFetch,
+		Issues:        issues,
+	}
 }
 
 // Health reports the source's condition without touching the network.

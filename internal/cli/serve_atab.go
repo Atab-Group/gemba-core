@@ -109,6 +109,16 @@ func loadATABSources(path string) ([]atab.SourceConfig, []string, error) {
 func buildATABRegistry(cfg config.ServeConfig) (*atab.Registry, string, error) {
 	reg := atab.NewRegistry()
 
+	// The store is attached before any source is added, because Add is
+	// what restores each source's stored snapshot.
+	if cfg.ATABStateDir != "" {
+		store, err := atab.NewFileStore(cfg.ATABStateDir)
+		if err != nil {
+			return nil, "", err
+		}
+		reg.WithStore(store)
+	}
+
 	switch {
 	case cfg.ATABFixture != "":
 		client, file, err := atab.LoadFixture(cfg.ATABFixture)
@@ -205,6 +215,14 @@ func registerATABWorkPlane(
 		"mode", "atab",
 		"read_only", manifest.ReadOnly,
 		"sources", strings.Join(names, ","))
+
+	for id, r := range reg.Restored() {
+		slog.Info("atab: restored a stored snapshot",
+			"source", string(id),
+			"items", r.Items,
+			"observed_at", r.ObservedAt.UTC().Format(time.RFC3339),
+			"age", time.Since(r.ObservedAt).Round(time.Second))
+	}
 
 	driveATABSources(reg)
 
