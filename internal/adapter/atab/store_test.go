@@ -288,3 +288,63 @@ func TestFingerprint_TracksTheSourceShape(t *testing.T) {
 		}
 	}
 }
+
+// Persistence changes what "unreadable" means for a source that has a
+// stored board: it keeps serving that board instead of going blank. The
+// behaviour is deliberate and is pinned here rather than left to be
+// discovered, because it holds for a revoked credential exactly as it
+// does for a network blip, and the two deserve different reactions from
+// an operator.
+//
+// What the adaptor guarantees is that it never presents the stored board
+// as current and never hides the failure: the snapshot reads stale, and
+// health reports the source degraded with the reason. Purging genuinely
+// requires deleting the state directory, which is what the operator does
+// when access was withdrawn rather than interrupted.
+func TestStore_ARestrictedSourceKeepsServingItsStoredBoardAndSaysSo(t *testing.T) {
+	store := testStore(t)
+	first, _ := storedCache(t, store, testNow, DemoIssues())
+	if _, err := first.Snapshot(context.Background()); err != nil {
+		t.Fatalf("first Snapshot: %v", err)
+	}
+
+	cfg := DemoSourceConfig()
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	later := testNow.Add(cfg.StaleAfter + time.Minute)
+
+	restricted, client := storedCache(t, store, later, nil)
+	client.SetFailure(core.NewAdaptorError(core.KindCapabilityDenied,
+		"this credential is not authorised for the requested source"))
+
+	snap, err := restricted.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("a restored board still serves: %v", err)
+	}
+	if len(snap.Issues) != len(DemoIssues()) {
+		t.Errorf("issues = %d, want the stored %d", len(snap.Issues), len(DemoIssues()))
+	}
+	if snap.Freshness != FreshnessStale {
+		t.Errorf("freshness = %q, want stale; a stored board must never read current",
+			snap.Freshness)
+	}
+
+	h := restricted.Health()
+	if h.Healthy {
+		t.Error("a source the credential can no longer read reports healthy")
+	}
+	if h.Reason == "" {
+		t.Error("health gives no reason for a source that cannot be read")
+	}
+	// Deleting the state directory is the purge, and it has to actually
+	// purge: a fresh cache over an empty store holds nothing.
+	if err := os.Remove(store.path(DemoSourceID)); err != nil {
+		t.Fatalf("remove stored snapshot: %v", err)
+	}
+	purged, purgedClient := storedCache(t, store, later, nil)
+	purgedClient.SetFailure(core.NewAdaptorError(core.KindCapabilityDenied, "still denied"))
+	if ok, _, items := purged.Restored(); ok {
+		t.Errorf("a purged store still restored %d items", items)
+	}
+}

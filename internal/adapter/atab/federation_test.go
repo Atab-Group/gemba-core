@@ -425,3 +425,138 @@ func TestRegistry_RefreshSourceRejectsAnUnknownID(t *testing.T) {
 		t.Fatalf("error = %v, want a tagged validation error", err)
 	}
 }
+
+// Offset paging slices this ordering, so the ordering has to be a
+// property of the data rather than of a map walk. Go randomises map
+// iteration per range, and the projection starts from a map, so an
+// ordering that depended on it would shuffle between two page requests
+// and a caller walking the pages would skip and duplicate items without
+// anything reporting an error.
+//
+// The guarantee is built in two steps: each source sorts its refs before
+// projecting, and the federated sort is stable, so ties fall back to
+// that ref order and then to source registration order.
+func TestRegistry_ListOrderIsIdenticalAcrossCalls(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add(DemoSourceConfig(), NewFixtureClient(DemoSourceID, DemoIssues())); err != nil {
+		t.Fatalf("add primary: %v", err)
+	}
+	if err := reg.Add(SecondaryDemoSourceConfig(),
+		NewFixtureClient(SecondaryDemoSourceID, SecondaryDemoIssues())); err != nil {
+		t.Fatalf("add secondary: %v", err)
+	}
+	wp := New(reg, core.TransportAPI)
+
+	var first []core.WorkItemID
+	for call := range 5 {
+		items, err := wp.ListWorkItems(t.Context(), core.WorkItemFilter{})
+		if err != nil {
+			t.Fatalf("call %d: %v", call, err)
+		}
+		ids := make([]core.WorkItemID, 0, len(items))
+		for _, it := range items {
+			ids = append(ids, it.ID)
+		}
+		if call == 0 {
+			first = ids
+			continue
+		}
+		if len(ids) != len(first) {
+			t.Fatalf("call %d returned %d items, first call returned %d",
+				call, len(ids), len(first))
+		}
+		for i := range ids {
+			if ids[i] != first[i] {
+				t.Fatalf("call %d differs at position %d: %q vs %q",
+					call, i, ids[i], first[i])
+			}
+		}
+	}
+}
+
+// Items sharing an UpdatedAt are the case that matters: GitHub stamps
+// with second resolution, so ties are ordinary rather than rare, and a
+// tie is exactly where an unstable sort would reorder between calls.
+// They must fall back to the qualified id, which is unique and fixed.
+func TestRegistry_TiedTimestampsFallBackToTheQualifiedID(t *testing.T) {
+	stamp := testNow.Add(-time.Hour)
+	issues := make([]Issue, 0, 6)
+	for _, n := range []int{5, 1, 4, 2, 6, 3} {
+		issues = append(issues, Issue{
+			Ref:       IssueRef{Owner: "Atab-Group", Repo: "Product-Seela", Number: n},
+			Title:     "tied",
+			State:     "OPEN",
+			CreatedAt: stamp,
+			UpdatedAt: stamp, // every issue shares the instant
+		})
+	}
+
+	reg := NewRegistry()
+	if err := reg.Add(DemoSourceConfig(), NewFixtureClient(DemoSourceID, issues)); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	items, err := New(reg, core.TransportAPI).ListWorkItems(t.Context(), core.WorkItemFilter{})
+	if err != nil {
+		t.Fatalf("ListWorkItems: %v", err)
+	}
+	if len(items) != len(issues) {
+		t.Fatalf("items = %d, want %d", len(items), len(issues))
+	}
+	for i := 1; i < len(items); i++ {
+		if items[i-1].ID >= items[i].ID {
+			t.Fatalf("tied items are not in id order at %d: %q then %q",
+				i, items[i-1].ID, items[i].ID)
+		}
+	}
+}
+
+// A page is a slice of that ordering, so walking it at any page size has
+// to reproduce the unpaged list exactly: every item once, in the same
+// places. This is the property the board depends on, expressed against
+// the adaptor rather than the HTTP handler.
+func TestRegistry_WalkingLimitsReproducesTheWholeList(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Add(DemoSourceConfig(), NewFixtureClient(DemoSourceID, DemoIssues())); err != nil {
+		t.Fatalf("add primary: %v", err)
+	}
+	if err := reg.Add(SecondaryDemoSourceConfig(),
+		NewFixtureClient(SecondaryDemoSourceID, SecondaryDemoIssues())); err != nil {
+		t.Fatalf("add secondary: %v", err)
+	}
+	wp := New(reg, core.TransportAPI)
+
+	full, err := wp.ListWorkItems(t.Context(), core.WorkItemFilter{})
+	if err != nil {
+		t.Fatalf("unpaged: %v", err)
+	}
+	if len(full) < 4 {
+		t.Fatalf("fixture set is too small to page: %d items", len(full))
+	}
+
+	for _, size := range []int{1, 2, 3, len(full) - 1, len(full)} {
+		var walked []core.WorkItemID
+		for offset := 0; offset < len(full); offset += size {
+			// The handler asks for offset+size and slices, which is what
+			// is being reproduced here.
+			page, err := wp.ListWorkItems(t.Context(), core.WorkItemFilter{Limit: offset + size})
+			if err != nil {
+				t.Fatalf("size %d offset %d: %v", size, offset, err)
+			}
+			if offset >= len(page) {
+				break
+			}
+			for _, it := range page[offset:] {
+				walked = append(walked, it.ID)
+			}
+		}
+		if len(walked) != len(full) {
+			t.Fatalf("size %d: walked %d items, want %d", size, len(walked), len(full))
+		}
+		for i := range walked {
+			if walked[i] != full[i].ID {
+				t.Fatalf("size %d: position %d is %q, want %q",
+					size, i, walked[i], full[i].ID)
+			}
+		}
+	}
+}

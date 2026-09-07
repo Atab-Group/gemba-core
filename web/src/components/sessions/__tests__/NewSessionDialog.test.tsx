@@ -27,6 +27,20 @@ vi.mock('@/api/sessions', async (importOriginal) => {
   };
 });
 
+// useMutation is replaced at module load rather than spied on per test.
+// vi.spyOn cannot redefine an export on an ESM module namespace, which
+// is what the two lifecycle tests below used to attempt: they failed
+// with "Cannot redefine property: useMutation" and took the reset
+// behaviour they cover down with them.
+//
+// The replacement delegates to the real implementation, which is what
+// every other test in this file relies on through QueryClientProvider.
+// Only the lifecycle tests swap it, and they put it back afterwards.
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('@tanstack/react-query');
+  return { ...actual, useMutation: vi.fn(actual.useMutation) };
+});
+
 import { listRepositories } from '@/api/repositories';
 import { useAgents } from '@/hooks/useAgents';
 import { useWorkItems } from '@/hooks/useWorkItems';
@@ -36,6 +50,12 @@ const mockedListRepositories = listRepositories as ReturnType<typeof vi.fn>;
 const mockedUseAgents = useAgents as ReturnType<typeof vi.fn>;
 const mockedUseWorkItems = useWorkItems as ReturnType<typeof vi.fn>;
 const mockedStartSession = startSession as ReturnType<typeof vi.fn>;
+const mockedUseMutation = reactQuery.useMutation as unknown as ReturnType<typeof vi.fn>;
+// Captured before any test swaps it. The suite-wide afterEach calls
+// clearAllMocks, which clears recorded calls but leaves a
+// mockReturnValue in place, so a swapped implementation has to be put
+// back explicitly or it leaks into every test that follows.
+const realUseMutation = mockedUseMutation.getMockImplementation();
 
 function wrap(children: ReactNode): JSX.Element {
   const qc = new QueryClient({
@@ -233,10 +253,13 @@ describe('NewSessionDialog bead-mode happy path', () => {
 });
 
 describe('NewSessionDialog lifecycle resets', () => {
+  afterEach(() => {
+    mockedUseMutation.mockImplementation(realUseMutation!);
+  });
+
   it('does not reset the start mutation on an initial closed mount', () => {
     const reset = vi.fn();
-    const useMutationSpy = vi.spyOn(reactQuery, 'useMutation');
-    useMutationSpy.mockReturnValue({
+    mockedUseMutation.mockReturnValue({
       mutate: vi.fn(),
       mutateAsync: vi.fn(),
       reset,
@@ -258,13 +281,11 @@ describe('NewSessionDialog lifecycle resets', () => {
     render(wrap(<NewSessionDialog open={false} onClose={() => {}} />));
 
     expect(reset).not.toHaveBeenCalled();
-    useMutationSpy.mockRestore();
   });
 
   it('resets exactly once when the dialog closes after being opened', () => {
     const reset = vi.fn();
-    const useMutationSpy = vi.spyOn(reactQuery, 'useMutation');
-    useMutationSpy.mockReturnValue({
+    mockedUseMutation.mockReturnValue({
       mutate: vi.fn(),
       mutateAsync: vi.fn(),
       reset,
@@ -288,6 +309,5 @@ describe('NewSessionDialog lifecycle resets', () => {
     rerender(wrap(<NewSessionDialog open={false} onClose={() => {}} />));
 
     expect(reset).toHaveBeenCalledTimes(1);
-    useMutationSpy.mockRestore();
   });
 });

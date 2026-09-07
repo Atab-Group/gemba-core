@@ -254,6 +254,35 @@ Three things keep a restored board honest:
 The stored watermark survives with the issues, so the read after a
 restart is incremental rather than a full crawl.
 
+### Ordering, and why paging is safe
+
+`ListWorkItems` returns items newest-updated first. The ordering is a
+property of the data rather than of a map walk, which is what makes
+`?offset=` safe to slice it with: each source sorts its refs before
+projecting, the federated sort is stable, and sources concatenate in
+registration order, so two items sharing an `updated_at` always land in
+the same order. GitHub stamps with second resolution, so ties are
+ordinary rather than rare, and an ordering that shuffled on ties would
+make a caller walking the pages skip and duplicate items with nothing
+reporting an error.
+
+The one case paging cannot cover is a refresh landing between two page
+requests. Offsets index a list that has moved, so an item can be missed
+or repeated across the boundary. A walk takes well under a second and
+`refresh_interval` is minutes, so the window is small, but it is real:
+treat a walk as a view of the board, not as a transaction over it.
+
+### A source the credential can no longer read
+
+A stored snapshot keeps serving when a refresh fails, and that holds for
+a withdrawn permission exactly as it does for a network blip. The
+adaptor never presents it as current: the snapshot reads `stale` and the
+health surface reports the source degraded with the reason.
+
+Purging is deleting the state directory. That is the operator's move
+when access was withdrawn rather than interrupted, and nothing else
+removes a stored board.
+
 ## Running it as a service
 
 The unit below runs the dashboard independently of any other service on
