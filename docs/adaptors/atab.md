@@ -35,21 +35,21 @@ projection of somebody else's tracker has nothing to dispatch.
 
 ## What the projection carries
 
-| Board surface | Where it comes from |
-| --- | --- |
-| Lane placement | Project #1 `Status`, mapped through the declared `StateMap` |
-| Priority | Project #1 `Priority` (`P0`–`P3`), as the core integer priority |
-| Area, Estimate | Project #1 single-select fields, on `Custom` |
-| Kind | the `type:` label, falling back to `atab-meta.type`; `epic` renders as the core milestone kind |
-| Acceptance criteria | the `## Acceptance Criteria` checklist in the issue body |
-| Autonomy tier | `atab-meta.autonomy` (`auto`, `pr`, `human`) |
-| Parent and children | GitHub-native sub-issue links, as `parent_child` edges |
-| Blockers | `atab-meta.blocked_by`, inverted into core `blocks` edges |
-| Provenance | `atab-meta.discovered_from`, as a `relates_to` edge plus the declared `atab:discovered_from` extension |
-| Readiness | derived by the same rules as the org's `ready_select` |
-| Assignee | GitHub assignees |
-| Lease | the newest `<!-- atab-lease ... -->` comment, reported separately from the assignee |
-| Evidence | linked pull requests, their `<!-- atab-local-ci -->` reports, their `<!-- atab-verify -->` verdicts, and their check runs |
+| Board surface       | Where it comes from                                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Lane placement      | Project #1 `Status`, mapped through the declared `StateMap`                                                               |
+| Priority            | Project #1 `Priority` (`P0`–`P3`), as the core integer priority                                                           |
+| Area, Estimate      | Project #1 single-select fields, on `Custom`                                                                              |
+| Kind                | the `type:` label, falling back to `atab-meta.type`; `epic` renders as the core milestone kind                            |
+| Acceptance criteria | the `## Acceptance Criteria` checklist in the issue body                                                                  |
+| Autonomy tier       | `atab-meta.autonomy` (`auto`, `pr`, `human`)                                                                              |
+| Parent and children | GitHub-native sub-issue links, as `parent_child` edges                                                                    |
+| Blockers            | `atab-meta.blocked_by`, inverted into core `blocks` edges                                                                 |
+| Provenance          | `atab-meta.discovered_from`, as a `relates_to` edge plus the declared `atab:discovered_from` extension                    |
+| Readiness           | derived by the same rules as the org's `ready_select`                                                                     |
+| Assignee            | GitHub assignees                                                                                                          |
+| Lease               | the newest `<!-- atab-lease ... -->` comment, reported separately from the assignee                                       |
+| Evidence            | linked pull requests, their `<!-- atab-local-ci -->` reports, their `<!-- atab-verify -->` verdicts, and their check runs |
 
 ### atab-meta
 
@@ -132,23 +132,23 @@ source the adaptor will not read.
       "org": "Partner-Org",
       "project_number": 4,
       "authority": "reference",
-      "field_names": {"Status": "State", "Priority": "Urgency"}
+      "field_names": { "Status": "State", "Priority": "Urgency" }
     }
   ]
 }
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `id` | lowercase-hyphen slug; the prefix on every work item id this source produces |
-| `org` | GitHub organisation login; also org-locks this source's cross-repo `atab-meta` edges |
-| `project_number` | org-level Projects v2 number; `0` means the source has no board |
-| `repos` | repositories to read; empty means every repository in the org the credential can see |
-| `field_names` | per-source overrides when a board spells a field differently |
-| `authority` | `canonical` or `reference`; see below |
-| `refresh_interval` | how often the source may be re-fetched (default `60s`) |
-| `stale_after` | age at which a snapshot is marked stale (default `10m`) |
-| `fixture` | optional path to a recorded file to replay instead of calling GitHub |
+| Field              | Meaning                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| `id`               | lowercase-hyphen slug; the prefix on every work item id this source produces         |
+| `org`              | GitHub organisation login; also org-locks this source's cross-repo `atab-meta` edges |
+| `project_number`   | org-level Projects v2 number; `0` means the source has no board                      |
+| `repos`            | repositories to read; empty means every repository in the org the credential can see |
+| `field_names`      | per-source overrides when a board spells a field differently                         |
+| `authority`        | `canonical` or `reference`; see below                                                |
+| `refresh_interval` | how often the source may be re-fetched (default `60s`)                               |
+| `stale_after`      | age at which a snapshot is marked stale (default `10m`)                              |
+| `fixture`          | optional path to a recorded file to replay instead of calling GitHub                 |
 
 Three properties hold across the whole registry, and each has a test
 that pins it:
@@ -203,10 +203,21 @@ Each source holds one snapshot, refreshed no more often than its
   are retried whole, and the source reports degraded until a clean fetch
   lands.
 
-A first load of a large source runs on the request path and can exceed a
-client's timeout. The board fills in over the refreshes that follow,
-because a partial merges rather than replacing. Lowering the repository
-count or raising the client timeout both shorten that window.
+The repositories in a source are read four at a time. One at a time does
+not finish a multi-repository org inside the API's 30 second request
+deadline, and the repositories at the back of the list simply never get
+asked; all at once reads as a burst to GitHub's secondary rate limiter,
+which costs the whole refresh rather than one repository. Results are
+flattened in the order the source declares its repositories, so the
+board does not reshuffle when a different repository answers first.
+
+The first read of every source happens in the background as soon as the
+plane is registered, on a context that belongs to the process rather
+than to a browser tab. A cold crawl of nine repositories takes about 45
+seconds, which no HTTP request can wait for, so without this the board
+served whatever prefix of the org fit inside one request. While that
+first read is in flight the board is empty and its freshness reads
+`unknown`; it fills when the read lands.
 
 ## Running it as a service
 
@@ -335,6 +346,14 @@ test fails when the two drift.
 - **Bounded reads.** A fetch reads at most `maxPages` pages per
   repository (20 pages of 50 by default). A repository with more issues
   than that in one window is truncated at the newest end.
+- **The list endpoint caps at 1000 items.** `GET /api/work-items`
+  applies a server-wide default limit that is not this adaptor's, and
+  the SPA's board calls it without one. The live Atab-Group source
+  projects around 2500 items once closed issues are counted, so the
+  board sees the first 1000 in repository-declaration order and the
+  repositories at the end of the list are cut. `?limit=` raises it per
+  request. Ordering the source's `repos` by how much they are worked is
+  the lever until the endpoint paginates.
 - **Comment tails are bounded.** Lease detection reads the last 20
   comments on an issue and evidence reads the last 20 on a pull request.
   A lease buried under more than 20 later comments is not seen.
