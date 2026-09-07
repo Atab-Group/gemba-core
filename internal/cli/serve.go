@@ -173,6 +173,17 @@ authentication. Binding a non-loopback interface without --auth is an error.`,
 			"(dev/demo; mutually exclusive with --project-dir / --dolt-url; "+
 			"forces --orchestration=noop)")
 
+	cmd.Flags().BoolVar(&cfg.ATAB, "atab", false,
+		"bind the read-only GitHub / ATAB WorkPlane: project Atab-Group issues "+
+			"and Projects v2 onto the board (mutually exclusive with --project-dir, "+
+			"--dolt-url and --noop; forces --orchestration=none)")
+	cmd.Flags().StringVar(&cfg.ATABSources, "atab-sources", "",
+		"path to the JSON file allowlisting the sources --atab may read "+
+			"(default: the single built-in Atab-Group Project #1 source)")
+	cmd.Flags().StringVar(&cfg.ATABFixture, "atab-fixture", "",
+		"path to a recorded ATAB fixture to replay instead of calling GitHub; "+
+			"stands the dashboard up with no network and no credential")
+
 	cmd.Flags().BoolVar(&cfg.BeadsOnly, "beads-only", false,
 		"run as a Beads-only viewer/manager: no project or orchestration required; "+
 			"mutations append a JSONL Beads history manifest")
@@ -305,7 +316,8 @@ func runServe(ctx context.Context, cfg config.ServeConfig, b BuildInfo, quiet bo
 	//   - --embedded-dolt on AND --dolt-url empty         → use supervisor.DSN()
 	//   - neither                                         → ValidateWorkPlaneFlags errors
 	var doltSup *supervisor.Supervisor
-	if cfg.EmbeddedDolt && cfg.DoltURL == "" && cfg.ProjectDir == "" && cfg.BeadsDir == "" && !cfg.Noop {
+	if cfg.EmbeddedDolt && cfg.DoltURL == "" && cfg.ProjectDir == "" && cfg.BeadsDir == "" &&
+		!cfg.Noop && !cfg.ATAB {
 		sup, err := bootEmbeddedDoltSupervisor(ctx, &cfg)
 		if err != nil {
 			return err
@@ -363,6 +375,8 @@ func runServe(ctx context.Context, cfg config.ServeConfig, b BuildInfo, quiet bo
 		if err := probeBd(os.Stderr); err != nil {
 			return err
 		}
+	} else if cfg.ATAB {
+		slog.Info("atab mode: skipping the bd CLI startup probe; this adaptor reads GitHub through gh")
 	} else {
 		slog.Info("beads-only Dolt URL mode: skipping bd CLI startup probe")
 	}
@@ -457,7 +471,7 @@ func runServe(ctx context.Context, cfg config.ServeConfig, b BuildInfo, quiet bo
 	// root to /new. Non-fatal: a config I/O error is logged and serve
 	// continues without redirecting so a broken config.toml doesn't
 	// block the operator.
-	if cfg.BeadsOnly {
+	if cfg.BeadsOnly || cfg.ATAB {
 		cfg.ColdStartRedirect = false
 	} else if redirect, err := coldStartRedirect(cfg); err != nil {
 		slog.Warn("cold-start redirect probe failed; serving normally",
@@ -962,6 +976,11 @@ func normalizeServeMode(cfg *config.ServeConfig) {
 	if cfg.BeadsReadOnly {
 		cfg.BeadsOnly = true
 	}
+	if cfg.ATAB {
+		// There is nothing to dispatch against a read-only projection of
+		// somebody else's tracker, so no orchestration plane is bound.
+		cfg.Orchestration = "none"
+	}
 }
 
 // safeIDPrefix returns the first 8 chars of an OAuth client id for
@@ -1013,6 +1032,12 @@ func runBdCommand(ctx context.Context, dir string, args ...string) ([]byte, erro
 }
 
 func shouldProbeBd(cfg config.ServeConfig) bool {
+	if cfg.ATAB {
+		// The ATAB adaptor shells out to gh, never to bd. Demanding bd
+		// on PATH would block a GitHub-only deployment on a tool it has
+		// no use for.
+		return false
+	}
 	if cfg.BeadsOnly && cfg.DoltURL != "" && cfg.BeadsDir == "" {
 		return false
 	}
@@ -1090,6 +1115,9 @@ func registerWorkPlane(ctx context.Context, cfg config.ServeConfig) (*workPlaneR
 	sh, err := buildShader(cfg)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.ATAB {
+		return registerATABWorkPlane(ctx, host, cfg, sh)
 	}
 	if cfg.Noop {
 		return registerNoopWorkPlane(ctx, host, sh)

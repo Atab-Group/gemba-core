@@ -88,6 +88,24 @@ type ServeConfig struct {
 	// When set, --orchestration is forced to "noop".
 	Noop bool
 
+	// ATAB, when true, binds the read-only GitHub / ATAB WorkPlane
+	// (internal/adapter/atab) instead of a Beads backend. GitHub and the
+	// org project board stay canonical; the server only ever reads them.
+	// Mutually exclusive with ProjectDir / DoltURL / Noop, and it forces
+	// --orchestration=none because there is nothing here to dispatch.
+	ATAB bool
+
+	// ATABSources is the path to the JSON file declaring which sources
+	// the ATAB WorkPlane may read. Empty falls back to the single
+	// built-in Atab-Group Project #1 source. There is no discovery path:
+	// a source not written down is a source the adaptor will not read.
+	ATABSources string
+
+	// ATABFixture is the path to a recorded fixture file. When set, the
+	// ATAB WorkPlane replays it instead of calling GitHub, which stands
+	// the dashboard up with no network and no credential.
+	ATABFixture string
+
 	// BeadsOnly, when true, runs Gemba as a Beads viewer/manager without
 	// binding an OrchestrationPlane or requiring a project. Mutating Beads
 	// actions append an informational JSONL manifest instead of dispatching
@@ -429,6 +447,24 @@ func (c ServeConfig) TLSEnabled() bool {
 // adaptor layer.
 func (c ServeConfig) ValidateWorkPlaneFlags() error {
 	projectDir := c.localProjectDir()
+	if c.ATAB {
+		if projectDir != "" || c.DoltURL != "" || c.Noop {
+			return fmt.Errorf(
+				"--atab is mutually exclusive with --project-dir, --dolt-url and --noop; " +
+					"the ATAB adaptor reads GitHub directly and has no Beads backend\n" +
+					"  drop the other selector, or drop --atab")
+		}
+		if c.ATABFixture != "" && c.ATABSources != "" {
+			return fmt.Errorf(
+				"--atab-fixture replays a recorded source, so it cannot be combined " +
+					"with --atab-sources; pass one or the other")
+		}
+		return nil
+	}
+	if c.ATABSources != "" || c.ATABFixture != "" {
+		return fmt.Errorf(
+			"--atab-sources and --atab-fixture only apply with --atab; add --atab or drop them")
+	}
 	if c.Noop && (projectDir != "" || c.DoltURL != "") {
 		return fmt.Errorf(
 			"--noop is mutually exclusive with --project-dir and --dolt-url; " +
@@ -457,9 +493,10 @@ func (c ServeConfig) ValidateWorkPlaneFlags() error {
 	if projectDir == "" && c.DoltURL == "" {
 		return fmt.Errorf(
 			"no WorkPlane selected; pass --project-dir <path>, " +
-				"--dolt-url <mysql://...>, or --noop\n" +
+				"--dolt-url <mysql://...>, --atab, or --noop\n" +
 				"  --project-dir <path>        route through the bd CLI (reads + writes)\n" +
 				"  --dolt-url <mysql://...>    direct SQL to a Dolt server\n" +
+				"  --atab                      read GitHub Issues + Projects v2 (read-only)\n" +
 				"  --noop                      bind in-memory reference adaptors (dev/demo)")
 	}
 	return nil

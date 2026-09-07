@@ -1,0 +1,49 @@
+{
+  "source": "partner-org",
+  "issues": [
+    {
+      "ref": {
+        "owner": "Partner-Org",
+        "repo": "Product-Seela",
+        "number": 301
+      },
+      "title": "Partner: reconcile the nightly export",
+      "body": "## Acceptance Criteria\n\n- [ ] The export reconciles to the ledger\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: task\nautonomy: pr\n```\n",
+      "url": "https://github.com/Partner-Org/Product-Seela/issues/301",
+      "state": "OPEN",
+      "labels": [
+        "type:task",
+        "priority:p2"
+      ],
+      "author": "partner-dev",
+      "created_at": "2026-09-01T07:00:00Z",
+      "updated_at": "2026-09-07T09:00:00Z",
+      "project_item": {
+        "item_id": "PVTI_partner_ready",
+        "project_number": 4,
+        "fields": {
+          "Priority": "P2",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Partner-Org",
+        "repo": "Product-Seela",
+        "number": 302
+      },
+      "title": "Partner: retire the v1 export format",
+      "body": "Done.\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: chore\nautonomy: pr\n```\n",
+      "url": "https://github.com/Partner-Org/Product-Seela/issues/302",
+      "state": "CLOSED",
+      "state_reason": "COMPLETED",
+      "labels": [
+        "type:chore"
+      ],
+      "author": "partner-dev",
+      "created_at": "2026-08-01T07:00:00Z",
+      "updated_at": "2026-09-01T07:00:00Z"
+    }
+  ]
+}
