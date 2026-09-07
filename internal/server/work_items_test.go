@@ -221,8 +221,10 @@ func TestGetWorkItem_NoHost_Returns503(t *testing.T) {
 // Envelope type for the list handler. Kept local so the wire shape stays
 // pinned in tests rather than being reimported from a shared package.
 type listWorkItemsEnvelope struct {
-	Items []core.WorkItem `json:"items"`
-	Total int             `json:"total"`
+	Items   []core.WorkItem `json:"items"`
+	Total   int             `json:"total"`
+	Offset  int             `json:"offset"`
+	HasMore bool            `json:"has_more"`
 }
 
 func TestListWorkItems_HappyPath_ReturnsEnvelope(t *testing.T) {
@@ -261,13 +263,16 @@ func TestListWorkItems_HappyPath_ReturnsEnvelope(t *testing.T) {
 	if env.Items[0].ID != "gm-1" || env.Items[1].ID != "gm-2" {
 		t.Fatalf("ids: want [gm-1 gm-2], got [%s %s]", env.Items[0].ID, env.Items[1].ID)
 	}
-	// No query string → zero-valued filter except for the default limit
-	// applied by the handler (gm-nr67). Pin the limit so a future tweak
-	// surfaces here; the rest of the filter must remain pristine.
-	wantFilter := core.WorkItemFilter{Limit: defaultListLimit}
+	// No query string → zero-valued filter except for the limit applied
+	// by the handler (gm-nr67). The adaptor is asked for one item more
+	// than the page holds, which is how has_more is decided: a page that
+	// comes back exactly full is otherwise indistinguishable from the
+	// last one. Pin it so a future tweak surfaces here; the rest of the
+	// filter must remain pristine.
+	wantFilter := core.WorkItemFilter{Limit: defaultListLimit + 1}
 	if !reflect.DeepEqual(gotFilter, wantFilter) {
 		t.Fatalf("handler should pass {Limit:%d} when no query params; got %+v",
-			defaultListLimit, gotFilter)
+			defaultListLimit+1, gotFilter)
 	}
 }
 
@@ -319,8 +324,10 @@ func TestListWorkItems_QueryFiltersPopulateWorkItemFilter(t *testing.T) {
 	if gotFilter.SprintID == nil || *gotFilter.SprintID != "sprint-1" {
 		t.Errorf("sprint_id: got %+v", gotFilter.SprintID)
 	}
-	if gotFilter.Limit != 50 {
-		t.Errorf("limit: want 50, got %d", gotFilter.Limit)
+	// 50 asked for, 51 fetched: the extra item is the has_more probe.
+	if gotFilter.Limit != 51 {
+		t.Errorf("limit: want 51 (the page of 50 plus the has_more probe), got %d",
+			gotFilter.Limit)
 	}
 }
 
@@ -369,8 +376,9 @@ func TestListWorkItems_DefaultLimitWhenOmitted(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	if gotFilter.Limit != defaultListLimit {
-		t.Errorf("default limit: want %d, got %d", defaultListLimit, gotFilter.Limit)
+	if gotFilter.Limit != defaultListLimit+1 {
+		t.Errorf("default limit: want %d (the default page plus the has_more probe), got %d",
+			defaultListLimit+1, gotFilter.Limit)
 	}
 }
 
@@ -535,5 +543,157 @@ func TestGetWorkItem_StaticSiblingRoutesWin(t *testing.T) {
 
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("/api/work-items/ready: want 501 (stub), got %d; body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+// pagedItems is n synthetic items in a stable order.
+func pagedItems(n int) []core.WorkItem {
+	out := make([]core.WorkItem, 0, n)
+	for i := range n {
+		out = append(out, core.WorkItem{
+			ID:            core.WorkItemID(fmt.Sprintf("gm-%04d", i)),
+			Kind:          "task",
+			Title:         fmt.Sprintf("item %d", i),
+			Status:        "open",
+			StateCategory: core.StateBacklog,
+		})
+	}
+	return out
+}
+
+// pagingHost serves a fixed corpus, honouring Limit the way every real
+// adaptor does and knowing nothing about offset.
+func pagingHost(t *testing.T, corpus []core.WorkItem) *api.Host {
+	t.Helper()
+	return newProgrammableHostFull(t, nil,
+		func(_ context.Context, f core.WorkItemFilter) ([]core.WorkItem, error) {
+			if f.Limit > 0 && f.Limit < len(corpus) {
+				return corpus[:f.Limit], nil
+			}
+			return corpus, nil
+		})
+}
+
+// Walking the pages must yield every item exactly once, in the adaptor's
+// order. This is the whole point of the change: a board that stops at
+// the first page silently drops whatever sorts last, which on a
+// multi-repository source is entire repositories rather than a thin
+// tail.
+func TestListWorkItems_PagingWalksTheWholeCorpusExactlyOnce(t *testing.T) {
+	const corpusSize = 250
+	corpus := pagedItems(corpusSize)
+	h := NewRouter(config.ServeConfig{}, fakeSPA(), pagingHost(t, corpus))
+
+	seen := make([]core.WorkItemID, 0, corpusSize)
+	offset, pages := 0, 0
+	for {
+		pages++
+		if pages > 20 {
+			t.Fatal("paging did not terminate")
+		}
+		req := httptest.NewRequest(http.MethodGet,
+			fmt.Sprintf("/api/work-items?limit=40&offset=%d", offset), nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("page at offset %d: want 200, got %d", offset, rec.Code)
+		}
+		var env listWorkItemsEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if env.Offset != offset {
+			t.Errorf("page echoed offset %d, want %d", env.Offset, offset)
+		}
+		for _, it := range env.Items {
+			seen = append(seen, it.ID)
+		}
+		if !env.HasMore {
+			break
+		}
+		if len(env.Items) == 0 {
+			t.Fatal("has_more was set on an empty page; the walk would not terminate")
+		}
+		offset += len(env.Items)
+	}
+
+	if len(seen) != corpusSize {
+		t.Fatalf("walked %d items, want %d", len(seen), corpusSize)
+	}
+	for i, id := range seen {
+		if want := corpus[i].ID; id != want {
+			t.Fatalf("item %d is %q, want %q; paging reordered or repeated the list", i, id, want)
+		}
+	}
+}
+
+// has_more has to be exact at the boundary. A page that comes back
+// exactly full is indistinguishable from the last one unless the handler
+// looked one item further, and getting this wrong either drops the tail
+// or loops forever on an empty page.
+func TestListWorkItems_HasMoreIsExactAtAPageBoundary(t *testing.T) {
+	corpus := pagedItems(80)
+	h := NewRouter(config.ServeConfig{}, fakeSPA(), pagingHost(t, corpus))
+
+	for _, tc := range []struct {
+		offset  int
+		want    bool
+		wantLen int
+	}{
+		{offset: 0, want: true, wantLen: 40},
+		{offset: 40, want: false, wantLen: 40}, // exactly full, and the last
+		{offset: 80, want: false, wantLen: 0},  // past the end
+	} {
+		req := httptest.NewRequest(http.MethodGet,
+			fmt.Sprintf("/api/work-items?limit=40&offset=%d", tc.offset), nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("offset %d: want 200, got %d", tc.offset, rec.Code)
+		}
+		var env listWorkItemsEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatalf("offset %d: decode: %v", tc.offset, err)
+		}
+		if env.HasMore != tc.want {
+			t.Errorf("offset %d: has_more = %v, want %v", tc.offset, env.HasMore, tc.want)
+		}
+		if len(env.Items) != tc.wantLen {
+			t.Errorf("offset %d: items = %d, want %d", tc.offset, len(env.Items), tc.wantLen)
+		}
+	}
+}
+
+// An offset past the end is an empty page, not an error and not a
+// wrapped-around first page.
+func TestListWorkItems_OffsetPastTheEndIsAnEmptyPage(t *testing.T) {
+	h := NewRouter(config.ServeConfig{}, fakeSPA(), pagingHost(t, pagedItems(3)))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/work-items?offset=99", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var env listWorkItemsEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Items) != 0 || env.HasMore {
+		t.Errorf("got %d items has_more=%v, want an empty final page",
+			len(env.Items), env.HasMore)
+	}
+}
+
+// A negative offset is a caller error. Clamping it to zero would quietly
+// serve page one to a caller that asked for something else.
+func TestListWorkItems_NegativeOffsetReturns400(t *testing.T) {
+	h := NewRouter(config.ServeConfig{}, fakeSPA(), pagingHost(t, pagedItems(3)))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/work-items?offset=-1", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }

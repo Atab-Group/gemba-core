@@ -227,6 +227,33 @@ refresh is a full crawl, so giving up would hand that crawl back to the
 request path where it cannot finish. A throttled source retries on its
 next interval and the board fills then.
 
+## Persistence across restarts
+
+`--atab-state-dir` keeps each source's snapshot between processes, one
+JSON file per source, written after every read that produced a board and
+restored when the source is registered.
+
+Without it a restart starts from an empty cache, an empty cache always
+fetches full, and a full fetch is the one thing a throttled credential
+cannot do, so a restart during a rate limit serves nothing at all until
+the budget returns. That is the moment the previous answer is most worth
+having.
+
+Three things keep a restored board honest:
+
+- It keeps the instant it was actually read at. Freshness is computed
+  from that instant, so a restored board reads `stale` as soon as it is
+  older than the source's budget and every card says so.
+- It is discarded when the source's shape changes. The fingerprint
+  covers org, board and repository set, because a snapshot taken before
+  a repository left the source would put that repository's issues back
+  and nothing later removes them.
+- A cache holding nothing is never written, so a total failure cannot
+  overwrite the stored board with an empty one.
+
+The stored watermark survives with the issues, so the read after a
+restart is incremental rather than a full crawl.
+
 ## Running it as a service
 
 The unit below runs the dashboard independently of any other service on
@@ -354,14 +381,13 @@ test fails when the two drift.
 - **Bounded reads.** A fetch reads at most `maxPages` pages per
   repository (20 pages of 50 by default). A repository with more issues
   than that in one window is truncated at the newest end.
-- **The list endpoint caps at 1000 items.** `GET /api/work-items`
-  applies a server-wide default limit that is not this adaptor's, and
-  the SPA's board calls it without one. The live Atab-Group source
-  projects around 2500 items once closed issues are counted, so the
-  board sees the first 1000 in repository-declaration order and the
-  repositories at the end of the list are cut. `?limit=` raises it per
-  request. Ordering the source's `repos` by how much they are worked is
-  the lever until the endpoint paginates.
+- **A page of the list is capped, and the board walks the pages.**
+  `GET /api/work-items` still applies its server-wide default limit, but
+  it now takes `?offset=` and answers with `has_more`, and the SPA walks
+  until that clears. The live Atab-Group source projects around 2500
+  items once closed issues are counted; before the walk existed, the
+  board showed the first 1000 in repository-declaration order and the
+  repositories at the end of the source's list were simply missing.
 - **Comment tails are bounded.** Lease detection reads the last 20
   comments on an issue and evidence reads the last 20 on a pull request.
   A lease buried under more than 20 later comments is not seen.

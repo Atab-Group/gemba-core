@@ -16,6 +16,14 @@ import type { AgentRef, DefinitionOfDone, WorkItem } from '@/types/core.gen';
 export interface ListWorkItemsEnvelope {
   items: WorkItem[];
   total: number;
+  // offset is the index this page started at, echoed back so a caller
+  // walking the list does not have to track it itself.
+  offset?: number;
+  // has_more says whether a page follows this one. The handler asks the
+  // adaptor for one item more than the page needs to decide it, so it is
+  // exact: a page that comes back exactly full is otherwise
+  // indistinguishable from the last one.
+  has_more?: boolean;
 }
 
 // WorkItemListFilter mirrors core.WorkItemFilter on the Go side.
@@ -29,6 +37,10 @@ export interface WorkItemListFilter {
   assignee_id?: string;
   sprint_id?: string;
   limit?: number;
+  // offset is the index into the adaptor's ordering that a page starts
+  // at. Set it only when walking pages by hand; listWorkItems() walks
+  // them for you.
+  offset?: number;
   // gm-e12.22.1: workflow-template + wisp opt-ins. Default behavior
   // hides templates and wisps from work surfaces (Plan / Backlog /
   // Sessions / Sprints). The Workflow Library opts in via
@@ -56,6 +68,9 @@ function buildListQuery(filter?: WorkItemListFilter): string {
   if (filter.assignee_id) p.set('assignee_id', filter.assignee_id);
   if (filter.sprint_id) p.set('sprint_id', filter.sprint_id);
   if (filter.limit != null) p.set('limit', String(filter.limit));
+  // A zero offset is the default, so it is left off the wire: the first
+  // page of a walk should look exactly like an unpaginated request.
+  if (filter.offset) p.set('offset', String(filter.offset));
   if (filter.include_templates) p.set('include_templates', 'true');
   if (filter.include_wisps) p.set('include_wisps', 'true');
   if (filter.created_since) p.set('created_since', filter.created_since);
@@ -68,9 +83,42 @@ function buildListQuery(filter?: WorkItemListFilter): string {
 // can treat listWorkItems like a query. Accepts an optional filter
 // (gm-e12.9.1); omit for the unfiltered list. Use
 // listWorkItemsEnvelope() below when the caller also needs `total`.
+// maxListPages bounds the walk. At the server's default page size this
+// is far more work than any board can usefully render, and it is here so
+// a server that answered has_more forever could not spin the tab
+// indefinitely. Hitting it means something is wrong with paging, not
+// that the workspace is large.
+const maxListPages = 50;
+
+// listWorkItems — GET /api/work-items, walking every page.
+//
+// The server caps a page at a default limit, and the board buckets items
+// into columns, so it needs all of them: stopping at the first page
+// silently drops whatever sorts last, which on a multi-repository source
+// is entire repositories rather than a thin tail. A caller that wants
+// one bounded page passes an explicit limit and gets exactly that.
 export async function listWorkItems(filter?: WorkItemListFilter): Promise<WorkItem[]> {
-  const env = await apiFetch<ListWorkItemsEnvelope>(`/work-items${buildListQuery(filter)}`);
-  return env.items ?? [];
+  // An explicit limit means the caller asked for a bounded read, so it
+  // is answered literally rather than walked.
+  if (filter?.limit != null || filter?.offset) {
+    const env = await apiFetch<ListWorkItemsEnvelope>(`/work-items${buildListQuery(filter)}`);
+    return env.items ?? [];
+  }
+
+  const all: WorkItem[] = [];
+  let offset = 0;
+  for (let page = 0; page < maxListPages; page++) {
+    const env = await apiFetch<ListWorkItemsEnvelope>(
+      `/work-items${buildListQuery({ ...filter, offset })}`
+    );
+    const items = env.items ?? [];
+    all.push(...items);
+    // A server predating has_more omits it, and one page is what it
+    // would have returned anyway.
+    if (!env.has_more || items.length === 0) break;
+    offset += items.length;
+  }
+  return all;
 }
 
 // listWorkItemsEnvelope — same fetch, but surfaces the full envelope for

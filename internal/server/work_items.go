@@ -46,6 +46,27 @@ func (r *Router) listWorkItems(w http.ResponseWriter, req *http.Request) {
 		httperr.Write(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	offset, err := parseOffset(req.URL.Query())
+	if err != nil {
+		httperr.Write(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
+	// Paging is done here rather than pushed into the adaptor, and the
+	// adaptor is asked for one item more than the page needs.
+	//
+	// Every adaptor already honours Limit, and none of them has an offset
+	// to honour. An adaptor that silently ignored an offset would serve
+	// page one for every page, so a caller walking the list would loop
+	// over the same items believing it was making progress. Slicing the
+	// adaptor's own ordering here is correct for all of them, and the
+	// extra item is what makes has_more exact instead of a guess: a page
+	// that comes back exactly full is indistinguishable from the last one
+	// without it.
+	page := filter.Limit
+	if page > 0 {
+		filter.Limit = offset + page + 1
+	}
 
 	items, err := wp.ListWorkItems(req.Context(), filter)
 	if err != nil {
@@ -56,10 +77,39 @@ func (r *Router) listWorkItems(w http.ResponseWriter, req *http.Request) {
 		items = []core.WorkItem{}
 	}
 
+	hasMore := false
+	if offset >= len(items) {
+		items = []core.WorkItem{}
+	} else {
+		items = items[offset:]
+	}
+	if page > 0 && len(items) > page {
+		items = items[:page]
+		hasMore = true
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": items,
-		"total": len(items),
+		"items":    items,
+		"total":    len(items),
+		"offset":   offset,
+		"has_more": hasMore,
 	})
+}
+
+// parseOffset reads ?offset=, the index into the adaptor's own ordering
+// that a page starts at. A negative offset is a caller error rather than
+// something to clamp, because clamping it would quietly serve page one to
+// a caller that asked for something else.
+func parseOffset(q url.Values) (int, error) {
+	raw := strings.TrimSpace(q.Get("offset"))
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, &badRequestError{msg: "offset must be a non-negative integer"}
+	}
+	return n, nil
 }
 
 // parseWorkItemFilter turns the request query string into a
