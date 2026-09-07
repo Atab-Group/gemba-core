@@ -206,6 +206,8 @@ func registerATABWorkPlane(
 		"read_only", manifest.ReadOnly,
 		"sources", strings.Join(names, ","))
 
+	warmATABSources(reg, names)
+
 	return &workPlaneReg{
 		Host:       host,
 		Manifest:   manifest,
@@ -213,4 +215,48 @@ func registerATABWorkPlane(
 		SourceKind: "github",
 		Source:     fmt.Sprintf("%s (%s)", sourceLabel, strings.Join(names, ", ")),
 	}, nil
+}
+
+// warmWindow bounds the startup read of every source. It is generous
+// because it is not on anyone's request path: the only cost of it
+// running long is that the board stays empty a little longer, and the
+// only cost of it being too short is a board that never fills at all.
+const warmWindow = 10 * time.Minute
+
+// warmATABSources reads every source once, in the background, as soon as
+// the plane is registered.
+//
+// Without it the first request to arrive pays for the whole cold crawl,
+// under whatever deadline that request happens to carry. The API's is 30
+// seconds, which a multi-repository org does not finish inside, so the
+// board renders as the prefix of the source that fit and reports itself
+// degraded. Doing the cold read here instead puts it on a context that
+// belongs to the process rather than to a browser tab.
+//
+// It is deliberately fire-and-forget: serving a board that is still
+// filling is better than refusing to listen until GitHub has answered,
+// and a source that fails here is reported by the health probe exactly
+// as it would be on any later refresh.
+func warmATABSources(reg *atab.Registry, names []string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), warmWindow)
+		defer cancel()
+
+		started := time.Now()
+		errs := reg.Refresh(ctx)
+		if len(errs) > 0 {
+			msgs := make([]string, 0, len(errs))
+			for _, err := range errs {
+				msgs = append(msgs, err.Error())
+			}
+			slog.Warn("atab: initial source read did not complete cleanly",
+				"sources", strings.Join(names, ","),
+				"took", time.Since(started).Round(time.Second),
+				"errors", strings.Join(msgs, "; "))
+			return
+		}
+		slog.Info("atab: sources warmed",
+			"sources", strings.Join(names, ","),
+			"took", time.Since(started).Round(time.Second))
+	}()
 }

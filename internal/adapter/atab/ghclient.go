@@ -7,10 +7,21 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GembaCore/gemba-core/core"
 )
+
+// fetchConcurrency bounds how many repositories are read at once.
+//
+// It is a compromise between two failure modes rather than a tuning
+// knob. One at a time does not finish a multi-repository source inside
+// an HTTP request deadline, so the board loses whichever repositories
+// sit at the back of the list. All at once reads as a burst to GitHub's
+// secondary rate limiter, which answers with a throttle that costs the
+// whole refresh rather than one repository.
+const fetchConcurrency = 4
 
 // GHClient reads GitHub through the authenticated `gh` CLI.
 //
@@ -125,20 +136,50 @@ func (c *GHClient) FetchIssues(ctx context.Context, opts FetchOptions) ([]Issue,
 		repos = discovered
 	}
 
+	// Repositories are fetched concurrently because the caller's context
+	// is usually an HTTP request deadline, and a sequential crawl of a
+	// nine-repository source does not finish inside one. When it does not,
+	// the repositories at the back of the list never get asked at all, and
+	// the board silently renders as whichever prefix fit in the budget.
+	//
+	// Results are collected per index and flattened in declaration order,
+	// so the same source always projects in the same order no matter which
+	// repository answers first. Limit is applied after the flatten for the
+	// same reason: truncating on arrival order would make the rows a
+	// bounded fetch returns depend on a race.
+	type repoResult struct {
+		issues []Issue
+		err    error
+	}
+	results := make([]repoResult, len(repos))
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, fetchConcurrency)
+	for i, repo := range repos {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			issues, err := c.fetchRepoIssues(ctx, repo, opts)
+			results[i] = repoResult{issues: issues, err: err}
+		}()
+	}
+	wg.Wait()
+
 	var out []Issue
 	var failures []error
 	var failedRepos []string
-	for _, repo := range repos {
-		issues, err := c.fetchRepoIssues(ctx, repo, opts)
-		if err != nil {
-			failures = append(failures, err)
-			failedRepos = append(failedRepos, repo)
+	for i, res := range results {
+		if res.err != nil {
+			failures = append(failures, res.err)
+			failedRepos = append(failedRepos, repos[i])
 			continue
 		}
-		out = append(out, issues...)
-		if opts.Limit > 0 && len(out) >= opts.Limit {
-			return out[:opts.Limit], nil
-		}
+		out = append(out, res.issues...)
+	}
+	if opts.Limit > 0 && len(out) > opts.Limit {
+		out = out[:opts.Limit]
 	}
 	if len(failures) > 0 {
 		// Partial and total failures both surface. A partial returns the

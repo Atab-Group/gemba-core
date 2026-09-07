@@ -2,10 +2,12 @@ package atab
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GembaCore/gemba-core/core"
 )
@@ -212,5 +214,125 @@ func TestGHClient_TotalFailureReturnsNoRows(t *testing.T) {
 	}
 	if core.AsAdaptorError(err) == nil {
 		t.Errorf("error is untagged: %v", err)
+	}
+}
+
+// slowGHShim writes a fake gh that answers for every repository after
+// pause, so the cost of reading a source scales with how the fetch is
+// scheduled rather than with the network.
+func slowGHShim(t *testing.T, pause string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gh")
+	script := `#!/bin/sh
+sleep ` + pause + `
+cat <<'JSON'
+{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false,"endCursor":""},
+"nodes":[{"number":1,"title":"answered","state":"OPEN","createdAt":"2026-09-01T00:00:00Z",
+"updatedAt":"2026-09-01T00:00:00Z"}]}}}}
+JSON
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write gh shim: %v", err)
+	}
+	return path
+}
+
+func repoNames(n int) []string {
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, fmt.Sprintf("Repo%02d", i))
+	}
+	return out
+}
+
+// A source is read repository-by-repository, and the caller's context is
+// usually an HTTP request deadline. Read one at a time, the repositories
+// at the back of a nine-repository org never get asked inside that
+// deadline, and the board renders as whichever prefix fit while
+// reporting itself merely degraded.
+//
+// The bound here is deliberately loose. It is not asserting a latency
+// target: it is asserting that the total is a function of the slowest
+// few repositories rather than the sum of all of them, which is the
+// difference a sequential fetch cannot produce.
+func TestGHClient_RepositoriesAreFetchedConcurrently(t *testing.T) {
+	const (
+		repos = 8
+		pause = 400 * time.Millisecond
+	)
+	cfg := DemoSourceConfig()
+	cfg.Repos = repoNames(repos)
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	client := NewGHClient(cfg).WithBinary(slowGHShim(t, "0.4"))
+
+	started := time.Now()
+	issues, err := client.FetchIssues(t.Context(), FetchOptions{IncludeClosed: true})
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("FetchIssues: %v", err)
+	}
+	if len(issues) != repos {
+		t.Fatalf("issues = %d, want one per repository (%d)", len(issues), repos)
+	}
+
+	sequential := repos * pause
+	waves := (repos + fetchConcurrency - 1) / fetchConcurrency
+	budget := time.Duration(waves)*pause + sequential/2
+	if elapsed >= budget {
+		t.Errorf("fetching %d repositories took %s; a concurrent fetch should "+
+			"cost about %d waves of %s, not the %s a sequential one does",
+			repos, elapsed.Round(time.Millisecond), waves, pause, sequential)
+	}
+}
+
+// Concurrency must not make the board's order depend on which repository
+// answered first. A source that reshuffles between refreshes is one a
+// reader cannot scan, and a Limit applied to arrival order would return
+// a different subset of the same board on every call.
+func TestGHClient_ResultsFollowDeclarationOrderNotArrivalOrder(t *testing.T) {
+	cfg := DemoSourceConfig()
+	cfg.Repos = repoNames(8)
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	client := NewGHClient(cfg).WithBinary(slowGHShim(t, "0.05"))
+
+	for attempt := range 3 {
+		issues, err := client.FetchIssues(t.Context(), FetchOptions{IncludeClosed: true})
+		if err != nil {
+			t.Fatalf("attempt %d: FetchIssues: %v", attempt, err)
+		}
+		for i, want := range cfg.Repos {
+			if issues[i].Ref.Repo != want {
+				t.Fatalf("attempt %d: issues[%d] came from %q, want %q",
+					attempt, i, issues[i].Ref.Repo, want)
+			}
+		}
+	}
+}
+
+// Limit truncates that stable order, so a bounded fetch returns the same
+// rows every time rather than a race's worth of them.
+func TestGHClient_LimitTruncatesInDeclarationOrder(t *testing.T) {
+	cfg := DemoSourceConfig()
+	cfg.Repos = repoNames(8)
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	client := NewGHClient(cfg).WithBinary(slowGHShim(t, "0.05"))
+
+	issues, err := client.FetchIssues(t.Context(), FetchOptions{IncludeClosed: true, Limit: 3})
+	if err != nil {
+		t.Fatalf("FetchIssues: %v", err)
+	}
+	if len(issues) != 3 {
+		t.Fatalf("issues = %d, want 3", len(issues))
+	}
+	for i, want := range cfg.Repos[:3] {
+		if issues[i].Ref.Repo != want {
+			t.Errorf("issues[%d] came from %q, want %q", i, issues[i].Ref.Repo, want)
+		}
 	}
 }
