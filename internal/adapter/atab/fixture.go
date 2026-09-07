@@ -32,6 +32,10 @@ type FixtureClient struct {
 	// failWith, when set, is returned by every read. Tests use it to
 	// make one source unreadable and assert the others keep working.
 	failWith error
+	// partialWith, when set, is returned alongside whatever rows the
+	// replay produces, which is the shape a real client uses when part
+	// of a source answers and part does not.
+	partialWith error
 	// calls counts FetchIssues invocations, which is how the cache tests
 	// prove a refresh was or was not attempted.
 	calls int
@@ -74,6 +78,15 @@ func (f *FixtureClient) SetFailure(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failWith = err
+}
+
+// SetPartial makes every subsequent FetchIssues return its rows
+// alongside err, which is how a client reports that part of a source
+// answered and part did not. Passing nil clears it.
+func (f *FixtureClient) SetPartial(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.partialWith = err
 }
 
 // Replace swaps the replayed issue set, simulating an upstream change
@@ -124,7 +137,7 @@ func (f *FixtureClient) FetchIssues(_ context.Context, opts FetchOptions) ([]Iss
 			break
 		}
 	}
-	return out, nil
+	return out, f.partialWith
 }
 
 // FetchIssue replays one issue.

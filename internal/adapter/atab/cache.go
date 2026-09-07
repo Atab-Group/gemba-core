@@ -143,12 +143,34 @@ func (c *Cache) refreshLocked(ctx context.Context, now time.Time) {
 	}
 
 	fetched, err := c.client.FetchIssues(ctx, opts)
-	if err != nil {
+
+	// A partial fetch is a non-nil error alongside a non-empty result:
+	// some repositories in the source answered and others did not. It is
+	// handled apart from both success and failure because treating it as
+	// either one loses work.
+	//
+	// Treating it as success would let a full re-anchor replace the map
+	// with only what answered, so one repository timing out would delete
+	// every item it owns from the board. Treating it as failure would
+	// throw away rows that were fetched successfully, and on a first load
+	// large enough to time out the source would never populate at all.
+	//
+	// So a partial merges, never replaces, and it does not re-anchor.
+	// Leaving lastFullFetch alone keeps the next refresh a full one, so
+	// the repositories that missed out are retried whole rather than
+	// crawling forward from an incremental watermark they never reached.
+	// The rows that did arrive are current, so the success watermark does
+	// move: withholding it would make the board report every fetched item
+	// as unknown because a ninth repository timed out, which is less
+	// truthful about those items, not more. What records the shortfall is
+	// lastErr, which the health surface and the probe read.
+	partial := err != nil && len(fetched) > 0
+	if err != nil && !partial {
 		c.lastErr = err
 		return
 	}
 
-	if full {
+	if full && !partial {
 		// A full fetch replaces the map, which is how an issue that was
 		// deleted, transferred or moved off the board leaves the board.
 		next := make(map[IssueRef]Issue, len(fetched))
@@ -162,7 +184,8 @@ func (c *Cache) refreshLocked(ctx context.Context, now time.Time) {
 			c.issues[is.Ref] = is
 		}
 	}
-	c.lastErr = nil
+
+	c.lastErr = err // nil on a clean fetch, the shortfall on a partial
 	c.lastSuccess = now
 }
 

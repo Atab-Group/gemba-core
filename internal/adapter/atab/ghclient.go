@@ -140,8 +140,13 @@ func (c *GHClient) FetchIssues(ctx context.Context, opts FetchOptions) ([]Issue,
 			return out[:opts.Limit], nil
 		}
 	}
-	if len(failures) > 0 && len(out) == 0 {
-		return nil, aggregateFailure(c.cfg.ID, failedRepos, failures)
+	if len(failures) > 0 {
+		// Partial and total failures both surface. A partial returns the
+		// rows that did arrive alongside the error, so the caller can
+		// keep them without being told the source is complete: silently
+		// dropping the failed repositories would shrink the board by
+		// however many issues they own, with nothing to show it happened.
+		return out, aggregateFailure(c.cfg.ID, failedRepos, failures)
 	}
 	return out, nil
 }

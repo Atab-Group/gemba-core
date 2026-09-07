@@ -2,6 +2,8 @@ package atab
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -107,14 +109,15 @@ func TestListIssuesQueryFor(t *testing.T) {
 	if !strings.Contains(all, "states: [OPEN, CLOSED]") {
 		t.Error("the include-closed query does not ask for closed issues")
 	}
+	// Every field the projection derives from has to be asked for. A
+	// missing one reads as an absent value rather than as an error, so
+	// the query text is pinned here.
 	for _, q := range []string{open, all, singleIssueQuery} {
 		for _, field := range []string{
-			"atab", // no marker expected; guards against an empty query
-			"projectItems", "closedByPullRequestsReferences", "subIssues", "parent", "comments",
+			"body", "stateReason", "labels", "assignees",
+			"parent", "subIssues", "comments",
+			"projectItems", "closedByPullRequestsReferences", "statusCheckRollup",
 		} {
-			if field == "atab" {
-				continue
-			}
 			if !strings.Contains(q, field) {
 				t.Errorf("query is missing %q", field)
 			}
@@ -135,5 +138,79 @@ func TestGHClient_FetchIssueRejectsAMalformedRef(t *testing.T) {
 	ae := core.AsAdaptorError(err)
 	if ae == nil || ae.Kind != core.KindValidation {
 		t.Fatalf("error = %v, want a tagged validation error before any network call", err)
+	}
+}
+
+// ghShim writes a fake gh that answers for okRepo and fails for every
+// other repository, so the partial-fetch path can be exercised without a
+// network.
+func ghShim(t *testing.T, okRepo string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gh")
+	script := `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    repo=` + okRepo + `)
+      cat <<'JSON'
+{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false,"endCursor":""},
+"nodes":[{"number":1,"title":"answered","state":"OPEN","createdAt":"2026-09-01T00:00:00Z",
+"updatedAt":"2026-09-01T00:00:00Z"}]}}}}
+JSON
+      exit 0
+      ;;
+  esac
+done
+echo "HTTP 500: upstream is unwell" >&2
+exit 1
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write gh shim: %v", err)
+	}
+	return path
+}
+
+// One repository failing must not discard the rows another returned, and
+// must not be reported as a clean fetch either.
+func TestGHClient_PartialFetchReturnsRowsAndAnError(t *testing.T) {
+	cfg := DemoSourceConfig()
+	cfg.Repos = []string{"Answers", "Fails"}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	client := NewGHClient(cfg).WithBinary(ghShim(t, "Answers"))
+
+	issues, err := client.FetchIssues(t.Context(), FetchOptions{IncludeClosed: true})
+	if err == nil {
+		t.Fatal("a repository failed; the fetch must not report itself clean")
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues = %d, want the one row the healthy repository returned", len(issues))
+	}
+	if issues[0].Ref.Repo != "Answers" {
+		t.Errorf("row came from %q", issues[0].Ref.Repo)
+	}
+	if !strings.Contains(err.Error(), "Fails") {
+		t.Errorf("error does not name the failing repository: %v", err)
+	}
+}
+
+// Every repository failing returns no rows and the tagged error.
+func TestGHClient_TotalFailureReturnsNoRows(t *testing.T) {
+	cfg := DemoSourceConfig()
+	cfg.Repos = []string{"Fails"}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	client := NewGHClient(cfg).WithBinary(ghShim(t, "NothingMatchesThis"))
+
+	issues, err := client.FetchIssues(t.Context(), FetchOptions{IncludeClosed: true})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %d, want none", len(issues))
+	}
+	if core.AsAdaptorError(err) == nil {
+		t.Errorf("error is untagged: %v", err)
 	}
 }

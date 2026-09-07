@@ -162,6 +162,12 @@ type Client interface {
 	// tagged *core.AdaptorError on failure: KindRequestFailed for
 	// transport trouble, KindRateLimited when GitHub throttles,
 	// KindCapabilityDenied when the token cannot see the source.
+	//
+	// A non-empty slice alongside a non-nil error means a partial fetch:
+	// part of the source answered and part did not. Callers keep the rows
+	// and treat the source as degraded. Returning only the rows would
+	// present an incomplete source as a complete one, and returning only
+	// the error would throw away work that was fetched successfully.
 	FetchIssues(ctx context.Context, opts FetchOptions) ([]Issue, error)
 
 	// FetchIssue returns one issue by ref, or a KindSessionNotFound

@@ -210,6 +210,66 @@ func TestCache_NeverReadSurfacesTheError(t *testing.T) {
 	}
 }
 
+// A partial fetch must never re-anchor the map. One repository timing
+// out during a full refresh would otherwise delete every item it owns
+// from the board, with nothing to show it happened.
+func TestCache_PartialFetchMergesAndNeverReplaces(t *testing.T) {
+	c, client, clock := testCache(t, DemoIssues())
+	ctx := context.Background()
+	if _, err := c.Snapshot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := len(DemoIssues())
+
+	// The next refresh is a full one and only one repository answers.
+	kept := DemoIssues()[0]
+	kept.UpdatedAt = clock.Add(fullRefreshEvery)
+	client.Replace([]Issue{kept})
+	client.SetPartial(core.NewAdaptorError(core.KindRequestFailed,
+		"atab: every repository in source \"atab-group\" failed (ATAB-Marketplace): timeout"))
+
+	*clock = clock.Add(fullRefreshEvery)
+	snap, err := c.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(snap.Issues) != before {
+		t.Fatalf("issues = %d after a partial refresh, want all %d kept", len(snap.Issues), before)
+	}
+	if h := c.Health(); h.Healthy {
+		t.Error("a partial fetch must leave the source reporting degraded")
+	}
+	// The rows that did arrive are current, so the board still asserts
+	// readiness over them.
+	if snap.Freshness != FreshnessFresh {
+		t.Errorf("freshness = %q, want fresh for the rows that did arrive", snap.Freshness)
+	}
+}
+
+// A partial does not re-anchor, so the next refresh stays a full one and
+// the repositories that missed out are retried whole rather than
+// crawling forward from a watermark they never reached.
+func TestCache_PartialFetchKeepsTheNextRefreshFull(t *testing.T) {
+	c, client, clock := testCache(t, DemoIssues())
+	ctx := context.Background()
+	client.SetPartial(core.NewAdaptorError(core.KindRequestFailed, "one repo timed out"))
+	if _, err := c.Snapshot(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	client.SetPartial(nil)
+	*clock = clock.Add(DefaultRefreshInterval)
+	if _, err := c.Snapshot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.LastOptions().UpdatedSince; !got.IsZero() {
+		t.Fatalf("the refresh after a partial sent watermark %v; it must be a full fetch", got)
+	}
+	if h := c.Health(); !h.Healthy {
+		t.Errorf("health = %+v, want healthy once a clean fetch lands", h)
+	}
+}
+
 func TestSourceConfig_NormalizeRejectsIncoherentFreshness(t *testing.T) {
 	cfg := SourceConfig{
 		ID: "s", Org: "o",

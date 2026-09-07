@@ -195,6 +195,18 @@ Each source holds one snapshot, refreshed no more often than its
   is old" rather than to an empty board.
 - A source that has never been read successfully has nothing to serve,
   and that is reported as an error.
+- A partial refresh, where some repositories in a source answer and
+  others do not, merges rather than replaces and does not re-anchor. One
+  repository timing out during a full refresh would otherwise delete
+  every item it owns from the board with nothing to show it happened.
+  The next refresh stays a full one so the repositories that missed out
+  are retried whole, and the source reports degraded until a clean fetch
+  lands.
+
+A first load of a large source runs on the request path and can exceed a
+client's timeout. The board fills in over the refreshes that follow,
+because a partial merges rather than replacing. Lowering the repository
+count or raising the client timeout both shorten that window.
 
 ## Running it as a service
 
