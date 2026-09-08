@@ -6,7 +6,7 @@
 // (including tests that mount the hooks with a fresh QueryClient per run).
 
 import { apiFetch } from './client';
-import type { AgentRef, DefinitionOfDone, WorkItem } from '@/types/core.gen';
+import type { ActivityPage, AgentRef, DefinitionOfDone, WorkItem } from '@/types/core.gen';
 
 // ListWorkItemsEnvelope is the wire shape the gm-peg list handler emits.
 // The server normalises nil slices so `items` is always a JSON array,
@@ -140,6 +140,36 @@ export async function getWorkItem(id: string): Promise<WorkItem> {
     throw new Error('getWorkItem: id is required');
   }
   return apiFetch<WorkItem>(`/work-items/${encodeURIComponent(id)}`);
+}
+
+// getWorkItemActivity — GET /api/work-items/{id}/activity, one backwards
+// page of the item's real history.
+//
+// This is not the same data as the bounded comment tail the projection
+// carries on the card. That tail exists for lease and evidence
+// detection; this is the backend's own timeline, read on demand. The
+// page reports has_older and at_oldest separately, and a renderer must
+// use at_oldest, not an empty next cursor, before telling anyone they
+// have seen the whole history.
+//
+// Throws ApiError with status 501 / code "unsupported" when the bound
+// adaptor keeps no history. That is a different answer from an item
+// nobody has touched, and callers must render it differently.
+export async function getWorkItemActivity(
+  id: string,
+  opts?: { before?: string; limit?: number }
+): Promise<ActivityPage> {
+  if (!id) {
+    throw new Error('getWorkItemActivity: id is required');
+  }
+  const params = new URLSearchParams();
+  if (opts?.before) params.set('before', opts.before);
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  const page = await apiFetch<ActivityPage>(
+    `/work-items/${encodeURIComponent(id)}/activity${qs ? `?${qs}` : ''}`
+  );
+  return { ...page, events: page.events ?? [] };
 }
 
 // WorkItemPatch mirrors the Go shape (internal/core/workplane.go).

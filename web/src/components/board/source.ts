@@ -2,12 +2,14 @@
 // those narrow within one tracker's hierarchy, this narrows to where the
 // work came from.
 //
-// "Project" here means the thing an operator points at: a configured
-// source (an org and its board) and, one level down, a repository. It is
-// deliberately not the issue's status or its lifecycle stage, which are
-// already the board's columns. A federated board mixes several orgs into
-// one set of lanes, and without this the only way to look at one of them
-// is to read every card's prefix.
+// A source is the thing an operator allowlisted: an org, a credential
+// and a repository set. It is deliberately not the issue's status or
+// lifecycle stage, which are already the board's columns, and it is not
+// the project board either: that axis lives in project.ts, because an
+// org can run several boards and work in a read repository can sit on
+// none of them. A federated board mixes several orgs into one set of
+// lanes, and without this the only way to look at one of them is to read
+// every card's prefix.
 //
 // URL param: ?source=<id>. Default = SOURCE_ALL, and the param is
 // dropped rather than written when nothing is selected, so a shared link

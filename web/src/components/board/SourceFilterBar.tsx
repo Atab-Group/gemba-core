@@ -2,10 +2,16 @@ import { cn } from '@/lib/utils';
 import type { WorkItem } from '@/types/core.gen';
 import { listSourceOptions, SOURCE_ALL, type SourceID } from './source';
 
-// SourceFilterBar is the prominent "which project am I looking at" row.
+// SourceFilterBar is the "which org did this work come from" row.
+//
+// It used to be labelled Project, which conflated two different things:
+// a source is an org plus a credential plus a repository allowlist, and
+// a project is one board inside it. The real board axis is
+// ProjectFilterBar, which sits above this one. Both are offered because
+// they answer different questions and compose.
 //
 // It is buttons rather than a dropdown because on a federated board this
-// is the first question rather than a refinement, and because the counts
+// is a first question rather than a refinement, and because the counts
 // are the useful part: a dropdown hides them until it is opened, which
 // is exactly when they stop being an overview. Every button carries the
 // number of items it would leave on the board, counted before any
@@ -41,7 +47,7 @@ export function SourceFilterBar({ items, value, onChange }: SourceFilterBarProps
     >
       <div className="flex flex-wrap items-center gap-1">
         <span className="mr-1 text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-          Project
+          Source
         </span>
         {sources.map((option) => (
           <SourceButton

@@ -63,6 +63,8 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { MilestonePicker } from '@/components/board/MilestonePicker';
 import { MILESTONE_ALL, filterByMilestone, type MilestoneID } from '@/components/board/milestone';
+import { PROJECT_ALL, filterByProject, type ProjectID } from '@/components/board/project';
+import { ProjectFilterBar } from '@/components/board/ProjectFilterBar';
 import { SOURCE_ALL, filterBySource, type SourceID } from '@/components/board/source';
 import { SourceFilterBar } from '@/components/board/SourceFilterBar';
 import {
@@ -337,6 +339,10 @@ export function BoardPage() {
   // survives a reload and travels in a shared link, and so selecting a
   // project leaves every other filter exactly where it was.
   const source: SourceID = params.get('source') ?? SOURCE_ALL;
+  // The project axis is independent of the source axis: a source is an
+  // org and a project is one board inside it, so both can be active at
+  // once and each is dropped from the URL when it is not.
+  const project: ProjectID = params.get('project') ?? PROJECT_ALL;
   const milestone: MilestoneID = params.get('milestone') ?? MILESTONE_ALL;
   const setSource = useCallback(
     (next: SourceID) => {
@@ -345,6 +351,17 @@ export function BoardPage() {
       else p.set('source', next);
       // Only the source key is touched, so search, status and every
       // other filter in the query string survive the change.
+      setParams(p, { replace: true });
+    },
+    [params, setParams]
+  );
+  const setProject = useCallback(
+    (next: ProjectID) => {
+      const p = new URLSearchParams(params);
+      if (next === PROJECT_ALL) p.delete('project');
+      else p.set('project', next);
+      // Only the project key is touched, so search, status, source and
+      // every other filter in the query string survive the change.
       setParams(p, { replace: true });
     },
     [params, setParams]
@@ -474,7 +491,11 @@ export function BoardPage() {
   // scope then narrow inside whatever that left. Running it last would
   // make the other two pickers enumerate options from projects the
   // operator had already filtered away.
-  const sourcedData = data ? filterBySource(data, source) : data;
+  // Project narrows before source: it is the narrower question, and the
+  // two compose in either order because neither depends on the other.
+  const sourcedData = data
+    ? filterBySource(filterByProject(data, project), source)
+    : data;
   const scopedData = sourcedData
     ? sortWorkItems(filterByScope(filterByMilestone(sourcedData, milestone), scope), orderKey)
     : sourcedData;
@@ -483,6 +504,7 @@ export function BoardPage() {
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
       {/* Fed the unfiltered set, so every count says what that button
           would show rather than what the current filter has left. */}
+      <ProjectFilterBar items={data ?? []} value={project} onChange={setProject} />
       <SourceFilterBar items={data ?? []} value={source} onChange={setSource} />
       <BoardHeader
         layout={layout}
