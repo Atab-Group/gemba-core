@@ -262,3 +262,80 @@ func TestWrap_Update_NoTitle_SkipsGet(t *testing.T) {
 		t.Fatalf("UpdateWorkItem: %v", err)
 	}
 }
+
+// --- optional-surface forwarding -------------------------------------
+
+// activityInner is a WorkPlane that can also read history.
+type activityInner struct {
+	core.WorkPlane
+	last core.ActivityQuery
+}
+
+func (a *activityInner) ReadActivity(
+	_ context.Context, id core.WorkItemID, q core.ActivityQuery,
+) (core.ActivityPage, error) {
+	a.last = q
+	return core.ActivityPage{
+		Events: []core.ActivityEvent{{ID: string(id), Kind: core.ActivityComment}},
+	}, nil
+}
+
+// notifyingActivityInner does both, which is the combination the atab
+// adaptor will grow into and the one a single-variant wrapper drops.
+type notifyingActivityInner struct {
+	*activityInner
+}
+
+func (n *notifyingActivityInner) NotifyExternal(
+	context.Context, core.WorkItemID, string,
+) (core.WorkItem, string, error) {
+	return core.WorkItem{}, "", nil
+}
+
+// The decorator sits between the server and every adaptor, so an
+// optional surface it drops is an optional surface the server reports as
+// absent. That failure is silent: the route answers "this adaptor keeps
+// no history" for an adaptor that does.
+func TestWrap_ForwardsTheActivityReader(t *testing.T) {
+	inner := &activityInner{WorkPlane: testadaptors.NewFakeWorkPlane(core.TransportAPI)}
+	wrapped := shader.Wrap(inner, nil)
+
+	reader, ok := wrapped.(core.ActivityReader)
+	if !ok {
+		t.Fatal("the wrapper dropped core.ActivityReader")
+	}
+	page, err := reader.ReadActivity(context.Background(), "gm-foo", core.ActivityQuery{Limit: 7})
+	if err != nil {
+		t.Fatalf("ReadActivity: %v", err)
+	}
+	if len(page.Events) != 1 || page.Events[0].ID != "gm-foo" {
+		t.Errorf("the page did not come from the inner adaptor: %+v", page)
+	}
+	if inner.last.Limit != 7 {
+		t.Errorf("the query did not reach the inner adaptor: %+v", inner.last)
+	}
+}
+
+// An adaptor with no history must not be made to look as though it has
+// one, or the server answers "supported" with nothing behind it.
+func TestWrap_DoesNotInventAnActivityReader(t *testing.T) {
+	wrapped := shader.Wrap(testadaptors.NewFakeWorkPlane(core.TransportAPI), nil)
+	if _, ok := wrapped.(core.ActivityReader); ok {
+		t.Fatal("the wrapper claims a history surface the adaptor does not have")
+	}
+}
+
+// Both optional surfaces have to survive together. Forwarding one and
+// dropping the other is the bug this combination exists to catch.
+func TestWrap_ForwardsBothOptionalSurfaces(t *testing.T) {
+	inner := &notifyingActivityInner{
+		activityInner: &activityInner{WorkPlane: testadaptors.NewFakeWorkPlane(core.TransportAPI)},
+	}
+	wrapped := shader.Wrap(inner, nil)
+	if _, ok := wrapped.(core.ActivityReader); !ok {
+		t.Error("the wrapper dropped core.ActivityReader")
+	}
+	if _, ok := wrapped.(core.WorkItemNotifier); !ok {
+		t.Error("the wrapper dropped core.WorkItemNotifier")
+	}
+}

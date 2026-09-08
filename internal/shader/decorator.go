@@ -25,23 +25,81 @@ import (
 // shader is equivalent to passing core.NopShader{} — callers don't
 // need to special-case the no-shader path.
 //
-// Optional capabilities (currently core.WorkItemNotifier — gm-jqwf,
-// follow-up to gm-e4.3.2) are forwarded conditionally: if the inner
-// adaptor implements the optional interface, the returned wrapper
-// also implements it via direct delegation. Adaptors that don't
-// implement the optional surface get the bare decorator, so the
-// server-side type assertion still 409s correctly against opt-out
-// backends.
+// Optional capabilities (core.WorkItemNotifier — gm-jqwf, follow-up to
+// gm-e4.3.2 — and core.ActivityReader) are forwarded conditionally: if
+// the inner adaptor implements the optional interface, the returned
+// wrapper also implements it via direct delegation. An adaptor that does
+// not implement the optional surface gets a wrapper that does not
+// either, so the server-side type assertion still 409s and 501s
+// correctly against opt-out backends.
+//
+// That conditionality is why this is a set of variants rather than one
+// struct carrying every optional method. A single wrapper implementing
+// all of them would make every adaptor look capable of everything, and
+// the server would answer "supported" for a backend with nothing behind
+// it. The cost is one variant per combination, which is the standing
+// reason to keep the set of optional surfaces small.
 func Wrap(inner core.WorkPlane, sh core.Shader) core.WorkPlane {
 	if sh == nil {
 		sh = core.NopShader{}
 	}
 	d := &decorator{inner: inner, shader: sh}
-	if n, ok := inner.(core.WorkItemNotifier); ok {
-		return &notifyingDecorator{decorator: d, notifier: n}
+
+	notifier, notifies := inner.(core.WorkItemNotifier)
+	reader, reads := inner.(core.ActivityReader)
+	switch {
+	case notifies && reads:
+		return &notifyingActivityDecorator{
+			notifyingDecorator: &notifyingDecorator{decorator: d, notifier: notifier},
+			reader:             reader,
+		}
+	case notifies:
+		return &notifyingDecorator{decorator: d, notifier: notifier}
+	case reads:
+		return &activityDecorator{decorator: d, reader: reader}
+	default:
+		return d
 	}
-	return d
 }
+
+// activityDecorator is the wrapper used when the inner adaptor can read
+// a work item's history.
+//
+// The page passes through unshaded. A shader rewrites work item titles;
+// a history is comment bodies and event summaries written by people on
+// the backend, and rewriting those would put words in their mouths.
+type activityDecorator struct {
+	*decorator
+	reader core.ActivityReader
+}
+
+func (a *activityDecorator) ReadActivity(
+	ctx context.Context, id core.WorkItemID, q core.ActivityQuery,
+) (core.ActivityPage, error) {
+	return a.reader.ReadActivity(ctx, id, q)
+}
+
+// notifyingActivityDecorator is the wrapper for an adaptor that does
+// both.
+type notifyingActivityDecorator struct {
+	*notifyingDecorator
+	reader core.ActivityReader
+}
+
+func (n *notifyingActivityDecorator) ReadActivity(
+	ctx context.Context, id core.WorkItemID, q core.ActivityQuery,
+) (core.ActivityPage, error) {
+	return n.reader.ReadActivity(ctx, id, q)
+}
+
+// Compile-time guarantees for the two activity variants.
+var (
+	_ core.WorkPlane        = (*activityDecorator)(nil)
+	_ core.ActivityReader   = (*activityDecorator)(nil)
+	_ core.WorkPlane        = (*notifyingActivityDecorator)(nil)
+	_ core.ActivityReader   = (*notifyingActivityDecorator)(nil)
+	_ core.WorkItemNotifier = (*notifyingActivityDecorator)(nil)
+)
 
 // notifyingDecorator is the WorkPlane wrapper used when the inner
 // adaptor implements core.WorkItemNotifier. NotifyExternal delegates

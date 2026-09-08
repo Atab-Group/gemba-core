@@ -11,6 +11,7 @@ import (
 	"github.com/GembaCore/gemba-core/core"
 	"github.com/GembaCore/gemba-core/internal/adapter/atab"
 	"github.com/GembaCore/gemba-core/internal/config"
+	"github.com/GembaCore/gemba-core/internal/shader"
 )
 
 func writeFixture(t *testing.T, source atab.SourceID, issues []atab.Issue) string {
@@ -217,5 +218,22 @@ func TestBuildATABRegistry_PerSourceFixture(t *testing.T) {
 	}
 	if !reg.Allowed("partner-org") {
 		t.Error("the fixture-backed source is not allowlisted")
+	}
+}
+
+// The plane the server actually holds is the wrapped one, not the
+// adaptor. This asserts the whole seam, because the failure it catches
+// is silent: the shader wrapper dropped core.ActivityReader once, and
+// the history route answered "this adaptor keeps no history" for an
+// adaptor that reads it.
+func TestATABWorkPlane_KeepsItsHistorySurfaceThroughTheShader(t *testing.T) {
+	path := writeFixture(t, atab.DemoSourceID, atab.DemoIssues())
+	reg, _, err := buildATABRegistry(config.ServeConfig{ATAB: true, ATABFixture: path})
+	if err != nil {
+		t.Fatalf("buildATABRegistry: %v", err)
+	}
+	wrapped := shader.Wrap(atab.New(reg, core.TransportAPI), nil)
+	if _, ok := wrapped.(core.ActivityReader); !ok {
+		t.Fatal("the registered plane does not implement core.ActivityReader")
 	}
 }
