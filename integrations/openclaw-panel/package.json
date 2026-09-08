@@ -1,0 +1,17 @@
+{
+  "name": "gemba-openclaw-panel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw plugin exposing a Gemba work summary to a dashboard widget.",
+  "license": "Apache-2.0",
+  "openclaw": {
+    "extensions": ["./src/index.js"]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.0"
+  }
+}

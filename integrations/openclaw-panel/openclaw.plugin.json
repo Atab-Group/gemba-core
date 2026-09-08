@@ -1,0 +1,26 @@
+{
+  "id": "gemba-panel",
+  "name": "Gemba panel",
+  "description": "Reads a Gemba instance's work summary for an OpenClaw dashboard widget.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["base_url"],
+    "properties": {
+      "base_url": {
+        "type": "string",
+        "description": "Origin of the Gemba server, for example http://127.0.0.1:7676. The Gateway reaches it, not the browser."
+      }
+    }
+  },
+  "dashboard": {
+    "dataBindings": [
+      {
+        "id": "summary",
+        "method": "gemba.summary.read",
+        "description": "Work totals, project boards, readiness and held work for the bound Gemba instance."
+      }
+    ]
+  }
+}
