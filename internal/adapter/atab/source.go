@@ -70,6 +70,11 @@ type SubIssueRef struct {
 
 // Comment is one issue comment, reduced to what lease detection reads.
 type Comment struct {
+	// ID is GitHub's REST comment id. The claim protocol picks a winner
+	// between competing lease comments by taking the highest id, so a
+	// client that cannot supply one leaves claims resolved by timestamp
+	// alone, which is the weaker rule.
+	ID        int64     `json:"id,omitempty"`
 	Body      string    `json:"body"`
 	Author    string    `json:"author,omitempty"`
 	CreatedAt time.Time `json:"created_at"`

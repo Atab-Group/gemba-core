@@ -409,10 +409,16 @@ type ghIssueRef struct {
 }
 
 type ghComment struct {
-	Body      string   `json:"body"`
-	CreatedAt string   `json:"createdAt"`
-	UpdatedAt string   `json:"updatedAt"`
-	Author    *ghActor `json:"author"`
+	// DatabaseID is the REST comment id. The claim protocol resolves a
+	// race between two lease comments by taking the highest one, because
+	// those ids are strictly monotonic while timestamps are not: a lease
+	// edited in place carries a newer updatedAt than a rival written
+	// after it.
+	DatabaseID int64    `json:"databaseId"`
+	Body       string   `json:"body"`
+	CreatedAt  string   `json:"createdAt"`
+	UpdatedAt  string   `json:"updatedAt"`
+	Author     *ghActor `json:"author"`
 }
 
 type ghFieldValue struct {
@@ -647,6 +653,7 @@ func convertComments(in []ghComment) []Comment {
 	out := make([]Comment, 0, len(in))
 	for _, c := range in {
 		cm := Comment{
+			ID:        c.DatabaseID,
 			Body:      c.Body,
 			CreatedAt: parseTime(c.CreatedAt),
 			UpdatedAt: parseTime(c.UpdatedAt),
@@ -688,7 +695,7 @@ const issueFields = `
     assignees(first:10){ nodes { login } }
     parent { number title state url repository { name owner { login } } }
     subIssues(first:50){ nodes { number title state url repository { name owner { login } } } }
-    comments(last:20){ nodes { body createdAt updatedAt author { login } } }
+    comments(last:20){ nodes { databaseId body createdAt updatedAt author { login } } }
     projectItems(first:5){
       nodes {
         id
@@ -708,7 +715,7 @@ const issueFields = `
       nodes {
         number title url state isDraft merged updatedAt
         repository { name owner { login } }
-        comments(last:20){ nodes { body createdAt updatedAt author { login } } }
+        comments(last:20){ nodes { databaseId body createdAt updatedAt author { login } } }
         commits(last:1){ nodes { commit { oid statusCheckRollup { state contexts(first:20){ nodes {
           ... on CheckRun { name status conclusion detailsUrl completedAt }
           ... on StatusContext { context state targetUrl createdAt }

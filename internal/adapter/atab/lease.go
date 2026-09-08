@@ -29,33 +29,33 @@ func (l Lease) Fresh(now time.Time) bool {
 	return !l.Expires.IsZero() && l.Expires.After(now)
 }
 
-// LatestLease returns the newest lease comment in comments, if any.
+// LatestLease returns the lease the claim protocol treats as
+// authoritative, if the issue carries one.
 //
-// A comment that does not parse is skipped rather than treated as a
-// claim. That direction is the safe one: an unreadable comment read as a
-// live lease would strand real work behind a claim nobody holds, while
-// reading it as no-lease at worst offers work that a second check at
-// claim time will refuse.
+// Election is by highest REST comment id, which is the canonical rule:
+// ids are strictly monotonic, while a lease renewed in place carries a
+// newer updatedAt than a rival written after it. Only a lease with a
+// readable future-or-past expiry is returned here; a holder standing
+// down with expires=expired is a claim state rather than a lease, and
+// [ClaimOf] is what reports it.
 func LatestLease(comments []Comment) (Lease, bool) {
-	var best Lease
-	var found bool
-	for _, c := range comments {
-		if !strings.HasPrefix(c.Body, leaseMarker) {
-			continue
-		}
-		lease, ok := parseLease(c)
-		if !ok {
-			continue
-		}
-		if !found || !lease.ObservedAt.Before(best.ObservedAt) {
-			best = lease
-			found = true
-		}
+	comment, ok := latestLeaseComment(comments)
+	if !ok {
+		return Lease{}, false
 	}
-	return best, found
+	lease, parsed := parseLeaseComment(comment)
+	if !parsed {
+		return Lease{}, false
+	}
+	return lease, true
 }
 
-func parseLease(c Comment) (Lease, bool) {
+// parseLeaseComment reads holder, instance and expiry out of one lease
+// comment. The bool reports whether a usable expiry was found: a lease
+// whose expiry is the literal "expired" parses its holder fine but
+// cannot be judged fresh, which is the difference between a released
+// claim and an unreadable one.
+func parseLeaseComment(c Comment) (Lease, bool) {
 	lease := Lease{ObservedAt: c.UpdatedAt}
 	if lease.ObservedAt.IsZero() {
 		lease.ObservedAt = c.CreatedAt
@@ -77,10 +77,7 @@ func parseLease(c Comment) (Lease, bool) {
 			}
 		}
 	}
-	// A lease with no expiry cannot be judged fresh or stale, so it is
-	// not a lease this adaptor will report.
-	if lease.Expires.IsZero() {
-		return Lease{}, false
-	}
-	return lease, true
+	// An expiry that did not parse leaves the holder readable and the
+	// lease unjudgeable, which the caller distinguishes on the bool.
+	return lease, !lease.Expires.IsZero()
 }
