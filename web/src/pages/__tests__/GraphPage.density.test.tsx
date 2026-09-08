@@ -1,10 +1,18 @@
-// GraphPage density tests (gm-vubw). Covers the auto-granularity
-// behaviour that flips a 300+ node workspace from items → epics when
-// the auto-fitted zoom lands below the readability threshold (0.3).
+// GraphPage density tests: what the page hands React Flow at company
+// scale.
 //
-// The stub exposes a getViewport hook the page reads after fitView so
-// the auto-flip can pick up the post-fit zoom; tests mutate the stub
-// state and re-fire onInit to simulate ReactFlow's behaviour.
+// The bound that matters is the one applied before the canvas exists.
+// The page used to render every filtered item, mount it, fit the camera,
+// read the resulting zoom and only then decide the view was too dense —
+// so the expensive render always happened, and the decision fed back
+// into the thing that produced it. These tests assert on the counts the
+// React Flow stub receives, which is the boundary the real renderer sits
+// behind, and they assert them on every render rather than the settled
+// one.
+//
+// The stub records what it was given and nothing else: node and edge
+// counts, and a button per node so a click can be simulated. It renders
+// no canvas, so a pass here says the page never asked for one.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
@@ -13,15 +21,8 @@ import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import type { WorkItem } from '@/types/core.gen';
 
-// fittedZoom controls what getViewport() returns post-fitView. Tests
-// set it BEFORE rendering so the first re-fit captures the chosen
-// zoom and drives the auto-granularity decision.
-let fittedZoom = 1;
-// onMoveCb captures the page's onMove handler so tests can simulate
-// the operator scrolling/zooming after the canvas has settled.
-let onMoveCb:
-  | ((evt: MouseEvent | null, viewport: { x: number; y: number; zoom: number }) => void)
-  | null = null;
+let mountedNodeCounts: number[] = [];
+let mountedEdgeCounts: number[] = [];
 
 vi.mock('reactflow', async () => {
   type StubNode = { id: string; data?: { id: string; title: string } };
@@ -36,23 +37,19 @@ vi.mock('reactflow', async () => {
     edges: { id: string; source: string; target: string }[];
     onNodeClick?: (e: unknown, node: StubNode) => void;
     onInit?: (instance: StubInstance) => void;
-    onMove?: (
-      evt: MouseEvent | null,
-      viewport: { x: number; y: number; zoom: number }
-    ) => void;
     children?: ReactNode;
   };
-  function ReactFlow({ nodes, edges, onNodeClick, onInit, onMove, children }: Props) {
-    onMoveCb = onMove ?? null;
+  function ReactFlow({ nodes, edges, onNodeClick, onInit, children }: Props) {
+    mountedNodeCounts.push(nodes.length);
+    mountedEdgeCounts.push(edges.length);
     const ref = (el: HTMLDivElement | null) => {
       if (el && onInit) {
-        const inst: StubInstance = {
+        onInit({
           fitView: () => undefined,
           setCenter: () => undefined,
           getNode: (id: string) => nodes.find((n) => n.id === id),
-          getViewport: () => ({ x: 0, y: 0, zoom: fittedZoom }),
-        };
-        onInit(inst);
+          getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+        });
       }
     };
     return (
@@ -92,6 +89,7 @@ import { CapabilitiesProvider } from '@/capabilities';
 import { HotkeysProvider } from '@/hotkeys';
 import { RhpProvider } from '@/components/rhp/RhpContext';
 import { RhpPinnedContentProvider } from '@/components/rhp/RhpPinnedContent';
+import { DEFAULT_MAX_EDGES, DEFAULT_MAX_NODES } from '@/components/graph/graphModel';
 import type { CapabilitiesResponse } from '@/capabilities';
 
 function caps(): CapabilitiesResponse {
@@ -110,13 +108,13 @@ function caps(): CapabilitiesResponse {
   };
 }
 
-function wrapper(): (p: { children: ReactNode }) => JSX.Element {
+function wrapper(entry = '/graph'): (p: { children: ReactNode }) => JSX.Element {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return function Wrapper({ children }: { children: ReactNode }): JSX.Element {
     return (
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[entry]}>
         <RhpProvider>
           <RhpPinnedContentProvider>
             <QueryClientProvider client={client}>
@@ -131,19 +129,6 @@ function wrapper(): (p: { children: ReactNode }) => JSX.Element {
   };
 }
 
-function wi(id: string, patch: Partial<WorkItem> = {}): WorkItem {
-  return {
-    id,
-    kind: 'task',
-    title: `title-${id}`,
-    status: 'open',
-    state_category: 'unstarted',
-    created_at: '2026-04-25T00:00:00Z',
-    updated_at: '2026-04-25T00:00:00Z',
-    ...patch,
-  };
-}
-
 function jsonResp(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -151,180 +136,196 @@ function jsonResp(body: unknown): Response {
   });
 }
 
-// makeLargeDataset builds a 300-item dataset where every item is a
-// child of one of three Epics. Cross-Epic blocks edges keep the
-// graph non-trivial. The shape mirrors what beads emits for a real
-// gemba workspace.
-function makeLargeDataset(): WorkItem[] {
-  const items: WorkItem[] = [];
-  const epicIds = ['e1', 'e2', 'e3'];
-  for (const eid of epicIds) {
-    items.push(wi(eid, { kind: 'epic' }));
-  }
-  for (let i = 0; i < 300; i++) {
-    const epicId = epicIds[i % epicIds.length];
-    items.push(
-      wi(`t${i}`, {
-        kind: 'task',
-        relationships: [{ kind: 'parent_child', from: epicId, to: `t${i}` }],
-      })
-    );
-  }
-  return items;
+/**
+ * companyBoard builds a board past the live one: n items across eight
+ * repositories, every item blocking three others and parented into an
+ * epic, for roughly 4n relationship rows.
+ */
+function companyBoard(n = 3000): WorkItem[] {
+  const ids = Array.from({ length: n }, (_, i) => `n${String(i).padStart(5, '0')}`);
+  return ids.map((id, i) => {
+    const relationships = [] as NonNullable<WorkItem['relationships']>;
+    for (const step of [1, 11, 97]) {
+      relationships.push({ kind: 'blocks', from: id, to: ids[(i + step) % n] });
+    }
+    if (i % 50 !== 0) {
+      relationships.push({ kind: 'parent_child', from: ids[i - (i % 50)], to: id });
+    }
+    return {
+      id,
+      kind: 'task',
+      title: `synthetic ${id}`,
+      status: 'open',
+      state_category: 'unstarted',
+      created_at: '2026-04-25T00:00:00Z',
+      updated_at: '2026-04-25T00:00:00Z',
+      relationships,
+      primary_repository_id: `Atab-Group/repo-${i % 8}`,
+      custom: { atab_source: 'atab-group', atab_repo: `Atab-Group/repo-${i % 8}` },
+    } as unknown as WorkItem;
+  });
 }
 
-describe('GraphPage density UX (gm-vubw)', () => {
-  const fetchSpy = vi.fn();
+let fetchSpy: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(() => {
-    vi.stubGlobal('fetch', fetchSpy);
-    fittedZoom = 1;
-    onMoveCb = null;
+function serve(items: WorkItem[]) {
+  fetchSpy.mockImplementation(async (...args: unknown[]) => {
+    const url = String(args[0]);
+    if (url.startsWith('/api/work-items/')) return jsonResp(items[0]);
+    return jsonResp({ items, total: items.length, has_more: false });
   });
+}
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    fetchSpy.mockReset();
-  });
+beforeEach(() => {
+  mountedNodeCounts = [];
+  mountedEdgeCounts = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fetchSpy = vi.spyOn(globalThis, 'fetch' as any) as any;
+});
 
-  it('auto-flips to epics when a 300-node workspace fits at low zoom', async () => {
-    // Simulate the real workspace: 303 nodes auto-fit at zoom 0.02.
-    fittedZoom = 0.02;
-    fetchSpy.mockResolvedValueOnce(
-      jsonResp({ items: makeLargeDataset(), total: 303 })
-    );
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('GraphPage at company scale', () => {
+  const board = companyBoard();
+
+  it('never hands React Flow more than the budget, on any render', async () => {
+    serve(board);
     render(<GraphPage />, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByTestId('rf-stub')).toBeTruthy());
 
-    // Wait for items to load and render initially as items (303 nodes
-    // before the auto-flip resolves on the next paint).
+    // Every render, not just the settled one. A page that draws the
+    // whole board once and aggregates afterwards has already paid for
+    // the render the budget exists to prevent.
+    expect(mountedNodeCounts.length).toBeGreaterThan(0);
+    for (const count of mountedNodeCounts) {
+      expect(count).toBeLessThanOrEqual(DEFAULT_MAX_NODES);
+    }
+    for (const count of mountedEdgeCounts) {
+      expect(count).toBeLessThanOrEqual(DEFAULT_MAX_EDGES);
+    }
+  });
+
+  it('defaults an unfiltered company board to the grouped overview', async () => {
+    serve(board);
+    render(<GraphPage />, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByTestId('rf-stub')).toBeTruthy());
+
+    const host = screen.getByTestId('graph-canvas-host');
+    expect(host.getAttribute('data-graph-mode')).toBe('overview');
+    // Eight repositories, so eight tiles rather than three thousand
+    // cards.
+    expect(Number(host.getAttribute('data-node-count'))).toBe(8);
+  });
+
+  it('says how much of the board it is standing for', async () => {
+    serve(board);
+    render(<GraphPage />, { wrapper: wrapper() });
+    const banner = await screen.findByTestId('graph-scope-banner');
+    expect(banner.textContent).toMatch(/grouping 3000 items/);
+  });
+
+  it('bounds scope mode and says what it cut', async () => {
+    serve(board);
+    render(<GraphPage />, { wrapper: wrapper('/graph?graph=scope') });
+    await waitFor(() => expect(screen.getByTestId('rf-stub')).toBeTruthy());
+
+    const host = screen.getByTestId('graph-canvas-host');
+    expect(host.getAttribute('data-graph-mode')).toBe('scope');
+    expect(Number(host.getAttribute('data-node-count'))).toBe(DEFAULT_MAX_NODES);
+    expect(Number(host.getAttribute('data-available-nodes'))).toBe(3000);
+
+    const banner = screen.getByTestId('graph-scope-banner');
+    expect(banner.getAttribute('data-truncated')).toBe('true');
+    expect(screen.getByTestId('graph-scope-count').textContent).toBe(
+      `Showing ${DEFAULT_MAX_NODES} of 3000 items`
+    );
+    // The banner offers the way out rather than leaving the reader to
+    // guess which control widens the view.
+    expect(screen.getByTestId('graph-scope-overview')).toBeTruthy();
+  });
+
+  it('draws a bounded neighbourhood when an item is focused', async () => {
+    serve(board);
+    render(<GraphPage />, { wrapper: wrapper('/graph?focus=n01500&depth=1') });
+    await waitFor(() => expect(screen.getByTestId('rf-stub')).toBeTruthy());
+
+    const host = screen.getByTestId('graph-canvas-host');
+    expect(host.getAttribute('data-graph-mode')).toBe('focus');
+    const drawn = Number(host.getAttribute('data-node-count'));
+    expect(drawn).toBeGreaterThan(1);
+    expect(drawn).toBeLessThanOrEqual(DEFAULT_MAX_NODES);
+    expect(screen.getByTestId('rf-stub-node-n01500')).toBeTruthy();
+  });
+
+  it('grows the neighbourhood one hop at a time', async () => {
+    serve(board);
+    render(<GraphPage />, { wrapper: wrapper('/graph?focus=n01500&depth=1') });
+    await waitFor(() => expect(screen.getByTestId('rf-stub')).toBeTruthy());
+
+    const before = Number(
+      screen.getByTestId('graph-canvas-host').getAttribute('data-node-count')
+    );
+    act(() => {
+      screen.getByTestId('graph-depth-more').click();
+    });
     await waitFor(() => {
-      const count = parseInt(
-        screen.getByTestId('rf-stub-node-count').textContent ?? '0',
-        10
+      const after = Number(
+        screen.getByTestId('graph-canvas-host').getAttribute('data-node-count')
       );
-      expect(count).toBeGreaterThan(0);
+      expect(after).toBeGreaterThan(before);
     });
-
-    // After the post-fit zoom is captured, the page should re-render
-    // with epic-aggregated nodes (3 epics → 3 nodes, no edges since
-    // the dataset has no cross-Epic links).
-    await waitFor(() => {
-      expect(screen.getByTestId('rf-stub-node-count').textContent).toBe('3');
-    });
-    expect(screen.getByTestId('graph-canvas-host').getAttribute('data-granularity')).toBe(
-      'epics'
-    );
+    expect(screen.getByTestId('graph-depth-value').textContent).toBe('2');
   });
 
-  it('keeps items granularity when the auto-fit zoom is above threshold', async () => {
-    // Small workspace fits comfortably: 5 items at zoom 1.
-    fittedZoom = 1;
-    fetchSpy.mockResolvedValueOnce(
-      jsonResp({
-        items: [wi('a'), wi('b'), wi('c'), wi('d'), wi('e')],
-        total: 5,
-      })
-    );
+  it('drills from a cluster into the items behind it', async () => {
+    serve(board);
     render(<GraphPage />, { wrapper: wrapper() });
-
     await waitFor(() =>
-      expect(screen.getByTestId('rf-stub-node-count').textContent).toBe('5')
+      expect(screen.getByTestId('graph-canvas-host').getAttribute('data-graph-mode')).toBe(
+        'overview'
+      )
     );
-    // The auto-fit zoom is 1.0 — well above 0.3 — so granularity
-    // stays on items and the canvas shows all five nodes.
-    await new Promise((r) => setTimeout(r, 0));
-    expect(screen.getByTestId('graph-canvas-host').getAttribute('data-granularity')).toBe(
-      'items'
+    act(() => {
+      screen.getByTestId('rf-stub-node-cluster:atab-group/Atab-Group/repo-0').click();
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('graph-canvas-host').getAttribute('data-graph-mode')).toBe(
+        'scope'
+      )
     );
+    // One repository's worth, not the whole board.
+    const available = Number(
+      screen.getByTestId('graph-canvas-host').getAttribute('data-available-nodes')
+    );
+    expect(available).toBe(375);
   });
 
-  it('respects manual override — auto-low zoom does not flip to epics after operator pins items', async () => {
-    fittedZoom = 0.02;
-    fetchSpy.mockResolvedValueOnce(
-      jsonResp({ items: makeLargeDataset(), total: 303 })
-    );
+  it('switches mode from the toolbar', async () => {
+    serve(board);
     render(<GraphPage />, { wrapper: wrapper() });
-
-    // Wait for the auto-flip to land on epics.
+    await waitFor(() => expect(screen.getByTestId('rf-stub')).toBeTruthy());
+    act(() => {
+      screen.getByTestId('graph-mode-scope').click();
+    });
     await waitFor(() =>
-      expect(screen.getByTestId('rf-stub-node-count').textContent).toBe('3')
+      expect(screen.getByTestId('graph-canvas-host').getAttribute('data-graph-mode')).toBe(
+        'scope'
+      )
     );
-
-    // Operator clicks the granularity toggle, pinning items.
-    const toggle = screen.getByTestId('graph-toggle-granularity');
-    act(() => {
-      toggle.click();
-    });
-    expect(
-      screen.getByTestId('graph-canvas-host').getAttribute('data-granularity')
-    ).toBe('items');
-    expect(
-      screen.getByTestId('graph-canvas-host').getAttribute('data-granularity-auto')
-    ).toBeNull();
-
-    // Simulate the operator panning at the same low zoom — auto
-    // mode is off, so the view stays on items even though the
-    // captured zoom (0.02) would otherwise force epics.
-    act(() => {
-      onMoveCb?.(new MouseEvent('mousemove'), { x: 0, y: 0, zoom: 0.02 });
-    });
-    expect(
-      screen.getByTestId('graph-canvas-host').getAttribute('data-granularity')
-    ).toBe('items');
+    expect(screen.getByTestId('graph-mode-scope').getAttribute('aria-checked')).toBe('true');
   });
 
-  it('Auto button re-enables auto-granularity after a manual pin', async () => {
-    fittedZoom = 0.02;
-    fetchSpy.mockResolvedValueOnce(
-      jsonResp({ items: makeLargeDataset(), total: 303 })
-    );
+  // A small board needs no aggregation, and forcing one on it would hide
+  // the graph behind a single tile.
+  it('draws a small board as items', async () => {
+    serve(companyBoard(20));
     render(<GraphPage />, { wrapper: wrapper() });
-
-    await waitFor(() =>
-      expect(screen.getByTestId('rf-stub-node-count').textContent).toBe('3')
-    );
-
-    // Pin items via toggle.
-    act(() => {
-      screen.getByTestId('graph-toggle-granularity').click();
-    });
-    expect(
-      screen.getByTestId('graph-canvas-host').getAttribute('data-granularity')
-    ).toBe('items');
-
-    // Click Auto to resume auto-driven granularity.
-    act(() => {
-      screen.getByTestId('graph-toggle-granularity-auto').click();
-    });
-    // Captured zoom is still 0.02 → auto returns to epics.
-    await waitFor(() =>
-      expect(
-        screen.getByTestId('graph-canvas-host').getAttribute('data-granularity')
-      ).toBe('epics')
-    );
-  });
-
-  it('flips back to items when the operator zooms in past the threshold', async () => {
-    fittedZoom = 0.02;
-    fetchSpy.mockResolvedValueOnce(
-      jsonResp({ items: makeLargeDataset(), total: 303 })
-    );
-    render(<GraphPage />, { wrapper: wrapper() });
-
-    await waitFor(() =>
-      expect(screen.getByTestId('rf-stub-node-count').textContent).toBe('3')
-    );
-
-    // Operator scroll-zooms in past the 0.3 threshold while still
-    // in auto mode. The onMove callback updates currentZoom and the
-    // auto-decision flips back to items.
-    act(() => {
-      onMoveCb?.(new MouseEvent('wheel'), { x: 0, y: 0, zoom: 0.5 });
-    });
-    await waitFor(() =>
-      expect(
-        screen.getByTestId('graph-canvas-host').getAttribute('data-granularity')
-      ).toBe('items')
-    );
+    await waitFor(() => expect(screen.getByTestId('rf-stub')).toBeTruthy());
+    const host = screen.getByTestId('graph-canvas-host');
+    expect(host.getAttribute('data-graph-mode')).toBe('scope');
+    expect(Number(host.getAttribute('data-node-count'))).toBe(20);
+    expect(screen.getByTestId('graph-scope-banner').getAttribute('data-truncated')).toBeNull();
   });
 });

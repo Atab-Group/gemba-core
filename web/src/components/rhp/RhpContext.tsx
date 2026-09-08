@@ -341,14 +341,28 @@ export function RhpProvider({ children }: { children: ReactNode }) {
 
   // ── URL writer ────────────────────────────────────────────────────
 
+  // The functional form is what keeps this writer to its own key.
+  //
+  // A captured snapshot means that when this and another owner of the
+  // query string both write in one tick, whichever lands second throws
+  // the other's key away. That is not hypothetical: the graph page sets
+  // ?focus when a node is clicked, in the same tick as this opens the
+  // detail tab, and one of the two disappeared depending on the order.
+  // Composing against the latest value writes RHP_URL_PARAM and touches
+  // nothing else.
   const writeDetails = useCallback(
     (next: DetailUrlEntry[]) => {
-      const params = new URLSearchParams(searchParams);
-      if (next.length === 0) params.delete(RHP_URL_PARAM);
-      else params.set(RHP_URL_PARAM, encodeRhpParam(next));
-      setSearchParams(params, { replace: true });
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          if (next.length === 0) params.delete(RHP_URL_PARAM);
+          else params.set(RHP_URL_PARAM, encodeRhpParam(next));
+          return params;
+        },
+        { replace: true }
+      );
     },
-    [searchParams, setSearchParams]
+    [setSearchParams]
   );
 
   // ── Per-current-route scoping ─────────────────────────────────────

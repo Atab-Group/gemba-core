@@ -1,27 +1,32 @@
 // Layered DAG layout for the dependency graph (gm-e12.16, top-down
 // re-orient gm-e12.20).
 //
-// We deliberately avoid a third-party layout dep (dagre, elkjs) — the
-// dependency graph is a sparse DAG with a handful of edge types and
-// at-most a few thousand nodes, and a hand-rolled layered placer is
-// faster to tune to our domain than to drag in a 200KB layout engine.
+// No third-party layout dependency: the dependency graph is a sparse
+// DAG with a handful of edge types, and a hand-rolled layered placer is
+// easier to tune to the domain than a 200KB layout engine is to bend.
 //
-// Layering: each node sits in a row equal to the longest hop chain
-// from any root. Roots (no incoming structural edges) anchor the top
-// of the canvas; descendants flow downward. Nodes inside cycles take
-// the layer of any one cycle member — they cluster together because
-// the rendering layer paints them red anyway.
+// Layering: collapse cycles to components, then each component's row is
+// its longest hop chain from any root of the condensation. Roots anchor
+// the top; descendants flow downward. Members of one cycle share a row,
+// which reads correctly because the renderer paints them as a cycle
+// anyway.
+//
+// The condensation is not an optimisation. The previous version relaxed
+// layer numbers over the raw graph until nothing changed, bailing after
+// V passes. Under cycles that never settles, and because it wrote
+// depths in place while iterating it could lift a node several layers
+// in a single pass. On the live 2790-item board it produced 4187
+// layers, more layers than nodes, and a canvas 416980 x 334960 pixels;
+// fitting that to a viewport puts every node below a pixel wide.
+// Condensing first makes the input acyclic, so one topological pass is
+// both correct and linear, and the same board lays out in 25 rows.
 //
 // Axes (gm-e12.20): layer → y (vertical), index-within-layer → x
-// (horizontal). The previous left-to-right orientation read upside-
-// down for a dependency view; top-down matches how operators read
-// "what's upstream / downstream" in a vertical scroll surface.
-//
-// Within a layer we sort by id to keep the layout deterministic
-// across renders. Horizontal spacing scales with the densest layer so
-// neighbours never overlap.
+// (horizontal). Within a layer, nodes sort by id so the layout is
+// identical across renders and the canvas does not jitter on refresh.
 
 import type { DirectedEdge } from './graphAnalysis';
+import { componentDepths, condense } from './scc';
 
 export interface LayoutNodeInput {
   id: string;
@@ -34,67 +39,48 @@ export interface LayoutResult {
   // these to fit-view the React Flow canvas on initial mount.
   width: number;
   height: number;
+  // layers is the number of rows used. Reported so a caller can assert
+  // the depth is the real dependency depth rather than an artefact of
+  // the layering, which is precisely what went wrong here before.
+  layers: number;
 }
 
 const COLUMN_WIDTH = 220;
 const ROW_HEIGHT = 80;
 const LAYER_PADDING = 40;
 
-// layoutLayered places nodes row-by-row from longest-chain depth.
-// Edges classified as "structural" drive layering; the
-// `structuralEdges` parameter lets the caller exclude non-ordering
-// kinds (relates_to, extension) which would otherwise inflate depth
-// estimates without representing a real predecessor / successor
-// relationship.
+/**
+ * layoutLayered places nodes row by row from their condensation depth.
+ *
+ * Only structural edges are passed in: `relates_to` and extension edges
+ * do not imply ordering, and counting them would inflate depth without
+ * representing a predecessor.
+ */
 export function layoutLayered(
   nodes: LayoutNodeInput[],
   structuralEdges: DirectedEdge[]
 ): LayoutResult {
   const ids = nodes.map((n) => n.id);
   if (ids.length === 0) {
-    return { positions: new Map(), width: 0, height: 0 };
+    return { positions: new Map(), width: 0, height: 0, layers: 0 };
   }
 
-  // Build adjacency and in-degree only over structural edges.
-  const out = new Map<string, string[]>();
-  const inDeg = new Map<string, number>();
-  for (const id of ids) {
-    out.set(id, []);
-    inDeg.set(id, 0);
-  }
-  for (const e of structuralEdges) {
-    if (!out.has(e.from) || !out.has(e.to)) continue;
-    out.get(e.from)!.push(e.to);
-    inDeg.set(e.to, (inDeg.get(e.to) ?? 0) + 1);
-  }
+  const known = new Set(ids);
+  // An edge naming a node outside this render is dropped rather than
+  // pulling a phantom into the condensation. A bounded view is a real
+  // subgraph, and laying out nodes that will not be drawn would leave
+  // holes in every row.
+  const scoped = structuralEdges.filter((e) => known.has(e.from) && known.has(e.to));
 
-  // Layer assignment via longest-path DP. Since the input may contain
-  // cycles, we run a relaxation that bails after V iterations — any
-  // node whose layer is still being raised after that count is part
-  // of a cycle and stays at the maximum it's reached so far.
-  const layer = new Map<string, number>();
-  for (const id of ids) layer.set(id, 0);
-  const v = ids.length;
-  for (let iter = 0; iter < v; iter++) {
-    let changed = false;
-    for (const id of ids) {
-      const baseLayer = layer.get(id)!;
-      for (const w of out.get(id) ?? []) {
-        if ((layer.get(w) ?? 0) <= baseLayer) {
-          layer.set(w, baseLayer + 1);
-          changed = true;
-        }
-      }
-    }
-    if (!changed) break;
-  }
+  const cond = condense(ids, scoped);
+  const depths = componentDepths(cond);
 
-  // Bucket nodes by layer, sort each layer by id for determinism.
   const layers: string[][] = [];
   for (const id of ids) {
-    const L = layer.get(id) ?? 0;
-    while (layers.length <= L) layers.push([]);
-    layers[L].push(id);
+    const comp = cond.compOf.get(id);
+    const row = comp == null ? 0 : depths[comp];
+    while (layers.length <= row) layers.push([]);
+    layers[row].push(id);
   }
   for (const bucket of layers) bucket.sort();
 
@@ -115,5 +101,6 @@ export function layoutLayered(
     positions,
     width: maxCols * COLUMN_WIDTH + LAYER_PADDING * 2,
     height: layers.length * ROW_HEIGHT + LAYER_PADDING * 2,
+    layers: layers.length,
   };
 }
