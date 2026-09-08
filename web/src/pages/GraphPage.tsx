@@ -122,6 +122,10 @@ const MINIMAP_MIN_NODES = 40;
 // set. Two or three frames is the normal case; the cap is what stops a
 // canvas that never populates from scheduling frames forever.
 const FIT_MAX_FRAMES = 20;
+// FIT_SETTLE_FRAMES is the wait after the node count matches, for React
+// Flow to apply the new positions. A resize keeps the count identical,
+// so without this the fit runs against the previous arrangement.
+const FIT_SETTLE_FRAMES = 2;
 const GRAPH_SEARCH_PARAM = 'q';
 
 function statesFromQuery(p: URLSearchParams): StateCategory[] {
@@ -448,7 +452,10 @@ export function GraphPage() {
   // number of nodes side by side is however many fit at a zoom somebody
   // can read at. Ten tiles in one line fitted to 0.27 on a half-width
   // panel, which is a picture of nothing.
-  const maxColumns = useMemo(() => columnsFor(canvasWidth), [canvasWidth]);
+  const maxColumns = useMemo(
+    () => columnsFor(canvasWidth, nodeIds.length),
+    [canvasWidth, nodeIds.length]
+  );
   const layout = useMemo(
     () => layoutLayered(nodeIds.map((id) => ({ id })), model.structuralEdges, { maxColumns }),
     [nodeIds, model.structuralEdges, maxColumns]
@@ -505,7 +512,11 @@ export function GraphPage() {
   const fitOverview = useCallback(() => {
     const inst = instanceRef.current;
     if (!inst) return;
-    void inst.fitView({ padding: 0.15, maxZoom: 1.2 });
+    // minZoom on the fit, not just on the canvas. A set too large to
+    // frame legibly is better shown legibly and panned than shown whole
+    // as a grey smear; the banner already says how much there is, and
+    // the minimap appears once there is enough to get lost in.
+    void inst.fitView({ padding: 0.15, maxZoom: 1.2, minZoom: 0.45 });
   }, []);
 
   // The signature covers what is drawn, not how much of it. Keying on
@@ -524,24 +535,38 @@ export function GraphPage() {
     if (expected === 0) return;
     if (lastFitSignature.current === viewSignature) return;
 
-    // The fit has to wait for React Flow to have the nodes in its own
-    // store, and one frame is not reliably enough: fitView against an
-    // empty store is a silent no-op, which is how the camera ended up
-    // parked at scale 1 on a canvas ten screens wide. So the attempt
-    // repeats until the store agrees with what was handed to it, and
-    // gives up after a few frames rather than spinning.
+    // Two separate waits, because two different things go wrong.
+    //
+    // First, React Flow has to have the node set: fitView against a
+    // store that has not received it is a silent no-op, which is how the
+    // camera ended up parked at scale 1 on a canvas ten screens wide.
+    // Waiting for the count covers that.
+    //
+    // Second, the count is not enough on its own. A resize reflows the
+    // layout without changing a single node, so the count matches on the
+    // first frame and the fit runs against positions React Flow has not
+    // applied yet, framing the arrangement that just went away. Two
+    // further frames after the count settles let the new positions land.
     let frame = 0;
     let handle = 0;
+    const fitNow = () => {
+      lastFitSignature.current = viewSignature;
+      fitOverview();
+    };
+    const settle = (remaining: number) => {
+      if (remaining === 0) {
+        fitNow();
+        return;
+      }
+      handle = requestAnimationFrame(() => settle(remaining - 1));
+    };
     const attempt = () => {
       const inst = instanceRef.current;
-      // A renderer that cannot report its nodes is taken at its word and
-      // fitted straight away; only a store that answers and disagrees is
-      // worth waiting on.
-      const ready =
+      // A renderer that cannot report its nodes is taken at its word.
+      const counted =
         inst && (typeof inst.getNodes !== 'function' || inst.getNodes().length >= expected);
-      if (ready) {
-        lastFitSignature.current = viewSignature;
-        fitOverview();
+      if (counted) {
+        settle(FIT_SETTLE_FRAMES);
         return;
       }
       if (frame++ < FIT_MAX_FRAMES) handle = requestAnimationFrame(attempt);
@@ -917,6 +942,8 @@ export function GraphPage() {
         data-node-count={model.nodes.length}
         data-edge-count={model.edges.length}
         data-available-nodes={model.availableNodes}
+        data-columns={maxColumns}
+        data-canvas-width={Number.isFinite(canvasWidth) ? Math.round(canvasWidth) : undefined}
       >
         {error ? (
           <div className="m-8 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { componentDepths, condense } from '../scc';
-import { columnsFor, layoutLayered } from '../graphLayout';
+import { columnsFor, layoutLayered, positionsSignature } from '../graphLayout';
 
 function edges(pairs: [string, string][]) {
   return pairs.map(([from, to]) => ({ from, to }));
@@ -157,6 +157,20 @@ describe('columnsFor', () => {
     expect(columnsFor(1200)).toBe(5);
   });
 
+  // A large set spreads out rather than becoming a ribbon: three hundred
+  // nodes four wide is seventy-five rows, which fits to the zoom floor
+  // however legible each row would have been.
+  it('widens for a large set even on a narrow canvas', () => {
+    expect(columnsFor(900, 300)).toBe(12);
+    expect(columnsFor(900, 36)).toBe(6);
+  });
+
+  // A handful of nodes stays as wide as the canvas allows rather than
+  // being squeezed into a square for no reason.
+  it('leaves a small set to the canvas', () => {
+    expect(columnsFor(1200, 4)).toBe(5);
+  });
+
   // Below three columns a wrapped layer becomes a column, which is a
   // worse shape than a slightly-too-wide row.
   it('never goes below three columns', () => {
@@ -174,5 +188,38 @@ describe('columnsFor', () => {
     expect(layout.width).toBeLessThanOrEqual(3 * 220 + 80);
     const rows = new Set([...layout.positions.values()].map((p) => p.y));
     expect(rows.size).toBe(4);
+  });
+});
+
+describe('positionsSignature', () => {
+  // The camera fit waits on this. A resize reflows the layout without
+  // changing a single node, so a count check passes on the first frame
+  // and the fit frames the arrangement that just went away.
+  it('differs when the same nodes are arranged differently', () => {
+    const ids = Array.from({ length: 8 }, (_, i) => `p${i}`);
+    const wide = layoutLayered(ids.map((id) => ({ id })), [], { maxColumns: 4 });
+    const narrow = layoutLayered(ids.map((id) => ({ id })), [], { maxColumns: 3 });
+    expect(positionsSignature(ids, wide.positions)).not.toBe(
+      positionsSignature(ids, narrow.positions)
+    );
+  });
+
+  it('is stable for the same arrangement', () => {
+    const ids = ['a', 'b'];
+    const layout = layoutLayered(ids.map((id) => ({ id })), []);
+    expect(positionsSignature(ids, layout.positions)).toBe(
+      positionsSignature(ids, layout.positions)
+    );
+  });
+
+  // A node the store has not placed yet must not read as settled.
+  it('differs when a node is missing a position', () => {
+    const ids = ['a', 'b'];
+    const layout = layoutLayered(ids.map((id) => ({ id })), []);
+    const partial = new Map(layout.positions);
+    partial.delete('b');
+    expect(positionsSignature(ids, partial)).not.toBe(
+      positionsSignature(ids, layout.positions)
+    );
   });
 });

@@ -73,10 +73,26 @@ export interface LayoutOptions {
   maxColumns?: number;
 }
 
-/** columnsFor turns a canvas width into a column cap. */
-export function columnsFor(canvasWidth: number): number {
-  if (!Number.isFinite(canvasWidth) || canvasWidth <= 0) return MAX_COLUMNS;
-  return Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, Math.floor(canvasWidth / COLUMN_WIDTH)));
+/**
+ * columnsFor picks the column cap from the canvas and the node count.
+ *
+ * Two pulls, and they point opposite ways. A narrow canvas wants few
+ * columns, so what is drawn is legible at a zoom near 1. A large set
+ * wants many, because the alternative is a ribbon: three hundred nodes
+ * four wide is seventy-five rows, which fits to the zoom floor and
+ * renders as a smear no matter how legible each row would have been.
+ *
+ * So the width sets the floor and a roughly square arrangement sets the
+ * ceiling. A handful of nodes stays as wide as the canvas allows; a
+ * board's worth spreads out until it is square-ish, capped so it never
+ * becomes a single line again.
+ */
+export function columnsFor(canvasWidth: number, nodeCount = 0): number {
+  const square = nodeCount > 0 ? Math.ceil(Math.sqrt(nodeCount)) : 0;
+  const byWidth = !Number.isFinite(canvasWidth) || canvasWidth <= 0
+    ? MAX_COLUMNS
+    : Math.floor(canvasWidth / COLUMN_WIDTH);
+  return Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, byWidth, square));
 }
 
 /**
@@ -139,4 +155,36 @@ export function layoutLayered(
     height: visualRow * ROW_HEIGHT + LAYER_PADDING * 2,
     layers: layers.length,
   };
+}
+
+/**
+ * positionsSignature identifies a laid-out arrangement.
+ *
+ * The camera fit has to happen after React Flow has taken the new
+ * positions, and counting nodes does not tell you that. A resize
+ * reflows the layout without changing a single node, so a count check
+ * passes on the first frame, the fit runs against the positions still in
+ * the store, and the camera ends up framing the arrangement that just
+ * went away. Comparing the arrangement itself is the only check that
+ * catches it.
+ */
+export function positionsSignature(
+  ids: string[],
+  positions: Map<string, { x: number; y: number }>
+): string {
+  let hash = 0x811c9dc5;
+  const mix = (n: number) => {
+    hash ^= n | 0;
+    hash = Math.imul(hash, 0x01000193);
+  };
+  for (const id of ids) {
+    const p = positions.get(id);
+    if (!p) {
+      mix(-1);
+      continue;
+    }
+    mix(Math.round(p.x));
+    mix(Math.round(p.y));
+  }
+  return `${ids.length}:${(hash >>> 0).toString(36)}`;
 }
