@@ -227,6 +227,61 @@ refresh is a full crawl, so giving up would hand that crawl back to the
 request path where it cannot finish. A throttled source retries on its
 next interval and the board fills then.
 
+## The issue graph and the claim
+
+Both are ATAB Core's, read off its own implementation rather than
+reasoned out here. A board that disagreed with the dispatcher about who
+holds an issue, or about what blocks it, would be worse than one showing
+neither.
+
+### Claim
+
+The claim is the answer to "is a worker holding this right now", and it
+is kept apart from the GitHub assignee everywhere. The assignee owns the
+issue; the claim says whether something is running against it this
+minute. A worker that dies leaves its assignee behind while its lease
+expires, and that difference is the only thing separating a stalled
+claim from a live one.
+
+The authoritative lease is the comment with the highest REST comment id,
+which is `claim.py`'s rule. Ids are strictly monotonic; timestamps are
+not, because renewal edits a lease in place, so electing on time hands
+the issue to the loser of a race the protocol already decided.
+
+| State      | Means                                                               |
+| ---------- | ------------------------------------------------------------------- |
+| `active`   | lease expiry ahead, heartbeat recent                                |
+| `stale`    | lease still held, holder has stopped beating                        |
+| `expired`  | expiry passed, or the holder wrote `expires=expired`                |
+| `claiming` | assigned with no lease yet, inside the sweep's grace window         |
+| `none`     | nothing holds it                                                    |
+| `unknown`  | the snapshot is outside its freshness budget, so no holder is named |
+
+`claiming` exists because the pipeline assigns seconds before it writes
+the lease; calling that gap unclaimed would invite a second worker into
+an issue somebody is taking. `stale` uses the one heartbeat cadence the
+contracts declare and three missed beats, which lands well inside the
+three-hour lease TTL so it warns ahead of expiry rather than competing
+with it.
+
+### Graph
+
+`atab_graph` rides on single-item reads only, because answering "what
+would finishing this release" needs the source's `blocked_by` edges
+inverted: one pass over the snapshot, cheap for the item a person opened
+and quadratic if done for every card.
+
+Blockers come from `blocked_by`, dependents from inverting it, parent
+and children from GitHub's native sub-issue link (which the schema
+deliberately does not duplicate), and provenance from `discovered_from`.
+Provenance is kept out of the blockers, or the board would hold work
+nothing is waiting on.
+
+Every edge carries a working GitHub link even when the target is
+unreadable here, and an unreadable target fails closed: state `unknown`,
+no invented title, counted so the panel can mark it. Reporting it as
+resolved would let an unreadable dependency silently unblock a queue.
+
 ## Persistence across restarts
 
 `--atab-state-dir` keeps each source's snapshot between processes, one
@@ -282,6 +337,24 @@ health surface reports the source degraded with the reason.
 Purging is deleting the state directory. That is the operator's move
 when access was withdrawn rather than interrupted, and nothing else
 removes a stored board.
+
+## A summary for an external widget
+
+`GET /api/work-summary` is a fixed-size read-only surface: totals by
+status, readiness and claim state, the same per source with its
+freshness, and a capped list of what is being worked. Everything in it
+is a count except that list, so the response does not grow with the
+board. The alternative for a status widget is fetching every page and
+counting client-side, which on this deployment is several megabytes per
+poll to render a handful of numbers.
+
+It is composed from the WorkPlane interface, so it answers for whichever
+adaptor is bound; an adaptor carrying none of the `atab_*` fields still
+gets a usable answer. Sources and held work are sorted, so a widget
+polling it does not reshuffle between two identical answers.
+
+Cross-origin access is off unless `--cors-allowed-origins` names an
+exact origin. There is no wildcard, and the flag is the only way in.
 
 ## Running it as a service
 
