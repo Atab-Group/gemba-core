@@ -14,6 +14,7 @@
 // Test-ids: work-item-drawer-* → workitem-detail-* per design-doc
 // convention (docs/design/rhp.md).
 
+import { AtabGraphPanel } from './AtabGraphPanel';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowDown,
@@ -466,6 +467,11 @@ function BeadBody({ item, onNavigate }: { item: WorkItem; onNavigate: (id: strin
             />
           ) : null}
           {!grouped.any ? <Muted>No relationships.</Muted> : null}
+          {/* The list above works from relationship ids alone, so it can
+              name a neighbour but not say whether it still holds, what it
+              is called, or whether this board can read it. The graph
+              panel answers those, and marks the edges it cannot. */}
+          <AtabGraphPanel item={item} onNavigate={onNavigate} />
         </Section>
       ) : null}
 

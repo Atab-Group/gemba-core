@@ -194,7 +194,12 @@ func (r *Router) workSummary(w http.ResponseWriter, req *http.Request) {
 		out.ClaimedTruncated = len(held) - summaryClaimCap
 		held = held[:summaryClaimCap]
 	}
-	out.Claimed = held
+	// A nil slice marshals to null, and a widget that has to handle both
+	// null and [] for "nothing is running" will eventually handle only
+	// one of them. The field is always an array.
+	if held != nil {
+		out.Claimed = held
+	}
 
 	writeJSON(w, http.StatusOK, out)
 }

@@ -177,3 +177,27 @@ func TestWorkSummary_NoAdaptorIsUnavailableNotEmpty(t *testing.T) {
 		t.Fatalf("want 503, got %d", rec.Code)
 	}
 }
+
+// The wire shape matters more than the decoded one: a nil slice
+// marshals to null, and a widget that has to handle both null and []
+// for "nothing is running" will eventually handle only one of them.
+// Decoding into a Go slice hides this, so the raw JSON is asserted.
+func TestWorkSummary_EmptyGroupsAreArraysNotNull(t *testing.T) {
+	h := summaryRouter(t, []core.WorkItem{
+		{ID: "gm-1", Kind: "task", Title: "plain", Status: "open", StateCategory: core.StateBacklog},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/work-summary", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, key := range []string{"claimed", "sources", "adaptors"} {
+		got := string(raw[key])
+		if got == "null" || got == "" {
+			t.Errorf("%s = %q, want a JSON array", key, got)
+		}
+	}
+}
