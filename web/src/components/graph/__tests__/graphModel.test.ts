@@ -6,6 +6,7 @@ import {
   MAX_DEPTH,
   buildGraphModel,
   clampDepth,
+  drawnSignature,
   parseMode,
   resolveMode,
 } from '../graphModel';
@@ -343,5 +344,41 @@ describe('aggregateClusters', () => {
     const agg = aggregateClusters([bare], []);
     expect(agg.clusters).toHaveLength(1);
     expect(agg.clusters[0].label).toBe('All work');
+  });
+});
+
+describe('drawnSignature', () => {
+  // The camera refits when this changes, so it has to change whenever
+  // the picture does. Counting alone missed a filter swap that left the
+  // same number of items, which is an everyday move.
+  it('differs for two different sets of the same size', () => {
+    expect(drawnSignature(['a', 'b', 'c'], 5)).not.toBe(drawnSignature(['a', 'b', 'd'], 5));
+  });
+
+  // A resize reflows the layout without changing a node, and the camera
+  // has to follow it.
+  it('differs when only the column count changed', () => {
+    expect(drawnSignature(['a', 'b'], 3)).not.toBe(drawnSignature(['a', 'b'], 8));
+  });
+
+  it('is stable for the same input', () => {
+    expect(drawnSignature(['a', 'b'], 4)).toBe(drawnSignature(['a', 'b'], 4));
+  });
+
+  // Order is part of the picture: the layout sorts within a layer, so a
+  // different order is a different arrangement.
+  it('differs when the order changed', () => {
+    expect(drawnSignature(['a', 'b'], 4)).not.toBe(drawnSignature(['b', 'a'], 4));
+  });
+
+  // Without a separator the hash would collide across a boundary, and a
+  // collision here is a canvas that silently stops refitting.
+  it('does not collide across an id boundary', () => {
+    expect(drawnSignature(['ab', 'c'], 4)).not.toBe(drawnSignature(['a', 'bc'], 4));
+  });
+
+  it('handles an empty set', () => {
+    expect(drawnSignature([], 4)).toBe(drawnSignature([], 4));
+    expect(drawnSignature([], 4)).not.toBe(drawnSignature(['a'], 4));
   });
 });

@@ -351,6 +351,35 @@ export function buildGraphModel(input: GraphModelInput): GraphModel {
   };
 }
 
+/**
+ * drawnSignature identifies exactly what is on the canvas.
+ *
+ * The camera refits when this changes, so it has to cover the node set
+ * itself and not merely its size. Counting alone was wrong in two
+ * everyday cases: switching between two filters that leave the same
+ * number of items, and resizing the window, which reflows the layout
+ * into a different number of columns without changing a single node.
+ * Both left the camera framing a picture that had moved out from under
+ * it.
+ *
+ * FNV-1a over the ids rather than the joined string: the ids are long
+ * and there can be three hundred of them, and this runs on every render
+ * that touches the drawn set.
+ */
+export function drawnSignature(ids: string[], columns: number): string {
+  let hash = 0x811c9dc5;
+  for (const id of ids) {
+    for (let i = 0; i < id.length; i++) {
+      hash ^= id.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    // A separator, so ["ab","c"] and ["a","bc"] do not collide.
+    hash ^= 0x2f;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${ids.length}:${columns}:${(hash >>> 0).toString(36)}`;
+}
+
 /** clampDepth keeps a URL-supplied depth inside the supported range. */
 export function clampDepth(raw: string | null): number {
   const n = Number.parseInt(raw ?? '', 10);

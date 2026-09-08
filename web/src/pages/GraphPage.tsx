@@ -78,6 +78,7 @@ import {
   MIN_DEPTH,
   buildGraphModel,
   clampDepth,
+  drawnSignature,
   parseMode,
   resolveMode,
   type GraphMode,
@@ -507,7 +508,16 @@ export function GraphPage() {
     void inst.fitView({ padding: 0.15, maxZoom: 1.2 });
   }, []);
 
-  const viewSignature = `${mode}|${focusedId ?? ''}|${depth}|${nodeIds.length}`;
+  // The signature covers what is drawn, not how much of it. Keying on
+  // the count alone missed two everyday cases: a filter change that
+  // happens to leave the same number of items, and a resize, which
+  // reflows the layout into a different number of columns without
+  // changing a node. Both left the camera framing a picture that had
+  // moved out from under it.
+  const viewSignature = useMemo(
+    () => `${mode}|${focusedId ?? ''}|${depth}|${drawnSignature(nodeIds, maxColumns)}`,
+    [mode, focusedId, depth, nodeIds, maxColumns]
+  );
   const lastFitSignature = useRef('');
   useEffect(() => {
     const expected = nodeIds.length;

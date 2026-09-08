@@ -15,7 +15,7 @@
 // no canvas, so a pass here says the page never asked for one.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
@@ -23,6 +23,10 @@ import type { WorkItem } from '@/types/core.gen';
 
 let mountedNodeCounts: number[] = [];
 let mountedEdgeCounts: number[] = [];
+// fitViewCalls counts camera fits. The camera has to follow the picture,
+// and the failure worth catching is the silent one: a view that changed
+// without the camera noticing.
+let fitViewCalls = 0;
 
 vi.mock('reactflow', async () => {
   type StubNode = { id: string; data?: { id: string; title: string } };
@@ -45,7 +49,9 @@ vi.mock('reactflow', async () => {
     const ref = (el: HTMLDivElement | null) => {
       if (el && onInit) {
         onInit({
-          fitView: () => undefined,
+          fitView: () => {
+            fitViewCalls += 1;
+          },
           setCenter: () => undefined,
           getNode: (id: string) => nodes.find((n) => n.id === id),
           getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
@@ -179,6 +185,7 @@ function serve(items: WorkItem[]) {
 beforeEach(() => {
   mountedNodeCounts = [];
   mountedEdgeCounts = [];
+  fitViewCalls = 0;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fetchSpy = vi.spyOn(globalThis, 'fetch' as any) as any;
 });
@@ -327,5 +334,66 @@ describe('GraphPage at company scale', () => {
     expect(host.getAttribute('data-graph-mode')).toBe('scope');
     expect(Number(host.getAttribute('data-node-count'))).toBe(20);
     expect(screen.getByTestId('graph-scope-banner').getAttribute('data-truncated')).toBeNull();
+  });
+});
+
+describe('GraphPage camera', () => {
+  // The refit used to key on the node count alone. Swapping between two
+  // filters that leave the same number of items is an everyday move, and
+  // it left the camera framing a picture that had moved out from under
+  // it.
+  it('refits when the drawn set changes but its size does not', async () => {
+    const side = (name: string, project: string) =>
+      companyBoard(6).map(
+        (it) =>
+          ({
+            ...it,
+            id: `${name}-${it.id}`,
+            relationships: [],
+            primary_repository_id: `Atab-Group/${name}`,
+            custom: {
+              atab_source: 'atab-group',
+              atab_repo: `Atab-Group/${name}`,
+              atab_project: project,
+              atab_project_title: project,
+              atab_projects: [{ id: project, number: 1, title: project }],
+            },
+          }) as unknown as WorkItem
+      );
+    serve([...side('left', 'Alpha'), ...side('right', 'Beta')]);
+
+    render(<GraphPage />, { wrapper: wrapper('/graph?graph=scope&project=Alpha') });
+    await waitFor(() =>
+      expect(
+        Number(screen.getByTestId('graph-canvas-host').getAttribute('data-node-count'))
+      ).toBe(6)
+    );
+    await waitFor(() => expect(fitViewCalls).toBeGreaterThan(0));
+    const before = fitViewCalls;
+    expect(screen.getByTestId('rf-stub-node-left-n00000')).toBeTruthy();
+
+    act(() => {
+      screen.getByTestId('graph-filter-menu-button').click();
+    });
+    const select = (await screen.findByTestId('graph-filter-project')) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'Beta' } });
+
+    // Same six nodes' worth, entirely different six nodes.
+    await waitFor(() => expect(screen.getByTestId('rf-stub-node-right-n00000')).toBeTruthy());
+    expect(
+      Number(screen.getByTestId('graph-canvas-host').getAttribute('data-node-count'))
+    ).toBe(6);
+    await waitFor(() => expect(fitViewCalls).toBeGreaterThan(before));
+  });
+
+  it('refits once per view change rather than on every render', async () => {
+    serve(companyBoard(20));
+    render(<GraphPage />, { wrapper: wrapper() });
+    await waitFor(() => expect(fitViewCalls).toBeGreaterThan(0));
+    const settled = fitViewCalls;
+    // Nothing changed, so nothing should refit. A camera that refits on
+    // every render is the loop this page used to have.
+    await new Promise((r) => setTimeout(r, 120));
+    expect(fitViewCalls).toBe(settled);
   });
 });
