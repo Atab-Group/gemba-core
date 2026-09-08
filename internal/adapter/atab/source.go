@@ -2,6 +2,7 @@ package atab
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -45,6 +46,16 @@ type Issue struct {
 	// ProjectItem is this issue's row on the source's project board, or
 	// nil when the issue is not on the board.
 	ProjectItem *ProjectItem `json:"project_item,omitempty"`
+
+	// Projects lists every Projects v2 board the fetch observed this
+	// issue on, including boards the source is not configured for.
+	//
+	// ProjectItem answers "what does this source's board say about this
+	// issue", which is where status and priority come from. This answers
+	// "which boards is this issue on", which is what a project filter
+	// needs: an org running a delivery board alongside a portfolio board
+	// would otherwise have half its work look unfiled.
+	Projects []ProjectRef `json:"projects,omitempty"`
 
 	// LinkedPRs are pull requests that reference the issue via a closing
 	// keyword, with their check state attached.
@@ -92,6 +103,22 @@ type ProjectItem struct {
 	ProjectNumber int               `json:"project_number"`
 	ProjectTitle  string            `json:"project_title,omitempty"`
 	Fields        map[string]string `json:"fields,omitempty"`
+}
+
+// ProjectRef names one Projects v2 board an issue sits on, without its
+// row. It is the identity a project filter groups by; the row's field
+// values belong to [ProjectItem].
+type ProjectRef struct {
+	Number int    `json:"number"`
+	Title  string `json:"title,omitempty"`
+}
+
+// QualifiedProjectID renders the collision-safe project identity inside
+// a source: "<source>#<number>". Two orgs both run a project #1, exactly
+// as two orgs both carry an issue #42, so the project axis is qualified
+// for the same reason work item ids are.
+func (p ProjectRef) QualifiedProjectID(source SourceID) string {
+	return fmt.Sprintf("%s#%d", source, p.Number)
 }
 
 // Field returns the board value for name, or "" when the board has no

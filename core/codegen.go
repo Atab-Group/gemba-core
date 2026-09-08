@@ -139,6 +139,19 @@ var tsExports = []tsExport{
 		comment: `// AgentGroup is the adaptor-agnostic view of a collection of agents
 // (gm-root DD-7). The Mode field picks the union arm carried by Members.`,
 	},
+	{
+		goType: reflect.TypeOf(ActivityEvent{}),
+		name:   "ActivityEvent",
+		comment: `// ActivityEvent is one entry in a work item's history, returned by the
+// optional ActivityReader surface (core/activity.go).`,
+	},
+	{
+		goType: reflect.TypeOf(ActivityPage{}),
+		name:   "ActivityPage",
+		comment: `// ActivityPage is one backwards page of a work item's history. It never
+// claims to be the whole history: has_older and at_oldest are separate
+// and both explicit, so a bounded read is never rendered as complete.`,
+	},
 }
 
 // emitInterface renders a Go struct as a TypeScript interface. Field
@@ -307,6 +320,25 @@ export const DISPATCH_STATUSES: readonly DispatchStatus[] = [
   "awaiting-review",
   "not-now",
 ] as const;
+
+// ActivityKind is closed: a renderer picks an icon and a sentence from
+// it, so an open set would mean a generic fallback for everything
+// unfamiliar. A backend event with no variant here arrives as "other"
+// carrying its own summary.
+export type ActivityKind =
+  | "comment"
+  | "closed"
+  | "reopened"
+  | "labeled"
+  | "unlabeled"
+  | "assigned"
+  | "unassigned"
+  | "renamed"
+  | "referenced"
+  | "milestoned"
+  | "demilestoned"
+  | "duplicate"
+  | "other";
 
 export type EstimatedSize =
   | ""

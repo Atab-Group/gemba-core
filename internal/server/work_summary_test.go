@@ -201,3 +201,90 @@ func TestWorkSummary_EmptyGroupsAreArraysNotNull(t *testing.T) {
 		}
 	}
 }
+
+// projectItem builds a projected item carrying the project axis.
+func projectItem(id, source, project, title string) core.WorkItem {
+	custom := map[string]any{
+		"atab_source":    source,
+		"atab_freshness": "fresh",
+	}
+	if project != "" {
+		custom["atab_project"] = project
+		custom["atab_project_title"] = title
+	}
+	return core.WorkItem{
+		ID:            core.WorkItemID(id),
+		Kind:          "task",
+		Title:         "item " + id,
+		Status:        "Todo",
+		StateCategory: core.StateBacklog,
+		Custom:        custom,
+	}
+}
+
+// The project axis is not the source axis. Two boards inside one org
+// have to count separately, or "project" would mean "org" and the filter
+// would answer a question nobody asked.
+func TestWorkSummary_CountsProjectsSeparatelyFromSources(t *testing.T) {
+	items := []core.WorkItem{
+		projectItem("a/1", "atab-group", "atab-group#1", "Atab Group Tasks"),
+		projectItem("a/2", "atab-group", "atab-group#1", "Atab Group Tasks"),
+		projectItem("a/3", "atab-group", "atab-group#4", "Portfolio"),
+		projectItem("b/1", "hadedahealth", "hadedahealth#1", "HadedaHealth Build"),
+	}
+	out := getSummary(t, summaryRouter(t, items))
+
+	if len(out.Sources) != 2 {
+		t.Fatalf("sources = %d, want 2", len(out.Sources))
+	}
+	if len(out.Projects) != 3 {
+		t.Fatalf("projects = %d, want 3 boards across 2 sources: %+v", len(out.Projects), out.Projects)
+	}
+	byID := map[string]summaryProject{}
+	for _, p := range out.Projects {
+		byID[p.ID] = p
+	}
+	if byID["atab-group#1"].Items != 2 {
+		t.Errorf("atab-group#1 = %d items, want 2", byID["atab-group#1"].Items)
+	}
+	if byID["atab-group#1"].Title != "Atab Group Tasks" {
+		t.Errorf("atab-group#1 title = %q", byID["atab-group#1"].Title)
+	}
+	if byID["atab-group#4"].Source != "atab-group" {
+		t.Errorf("atab-group#4 source = %q, want atab-group", byID["atab-group#4"].Source)
+	}
+}
+
+// Work on no board is a real answer and gets its own bucket. Leaving it
+// out would make the project counts disagree with the board total.
+func TestWorkSummary_UnfiledWorkIsItsOwnBucketAndSortsLast(t *testing.T) {
+	items := []core.WorkItem{
+		projectItem("a/1", "atab-group", "atab-group#1", "Atab Group Tasks"),
+		projectItem("a/2", "atab-group", "", ""),
+		projectItem("b/1", "hadedahealth", "", ""),
+	}
+	out := getSummary(t, summaryRouter(t, items))
+
+	if len(out.Projects) != 2 {
+		t.Fatalf("projects = %d, want the board plus the unfiled bucket", len(out.Projects))
+	}
+	last := out.Projects[len(out.Projects)-1]
+	if last.ID != "" {
+		t.Errorf("the unfiled bucket is not last: %+v", out.Projects)
+	}
+	if last.Items != 2 {
+		t.Errorf("unfiled = %d items, want 2 across both sources", last.Items)
+	}
+	// The bucket spans sources, so crediting it to one would be a lie.
+	if last.Source != "" {
+		t.Errorf("the unfiled bucket claims source %q", last.Source)
+	}
+
+	total := 0
+	for _, p := range out.Projects {
+		total += p.Items
+	}
+	if total != out.Total {
+		t.Errorf("project counts sum to %d, but the board holds %d", total, out.Total)
+	}
+}

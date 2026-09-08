@@ -566,7 +566,21 @@ func (c *GHClient) convert(owner, repo string, n ghIssue) Issue {
 	is.Comments = convertComments(n.Comments.Nodes)
 
 	for _, pi := range n.ProjectItems.Nodes {
+		// Every observed board is recorded, whether or not it is the one
+		// this source is configured for. The configured board decides
+		// status and priority; the full list is what the project filter
+		// groups by, and discarding the others here would make an issue
+		// that also sits on a second board look unfiled.
+		if pi.Project.Number != 0 {
+			is.Projects = append(is.Projects, ProjectRef{
+				Number: pi.Project.Number,
+				Title:  pi.Project.Title,
+			})
+		}
 		if c.cfg.ProjectNumber != 0 && pi.Project.Number != c.cfg.ProjectNumber {
+			continue
+		}
+		if is.ProjectItem != nil {
 			continue
 		}
 		item := &ProjectItem{
@@ -594,7 +608,6 @@ func (c *GHClient) convert(owner, repo string, n ghIssue) Issue {
 			}
 		}
 		is.ProjectItem = item
-		break
 	}
 
 	for _, pr := range n.ClosedByPullRequestsReferences.Nodes {

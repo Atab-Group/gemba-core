@@ -43,6 +43,23 @@ type summarySource struct {
 	Repos       map[string]int `json:"repos,omitempty"`
 }
 
+// summaryProject is one project board's contribution.
+//
+// It is a separate axis from the source: a source is an org plus a
+// credential and a repository allowlist, while a project is one board
+// inside it. An org can run several boards, and work in a repository the
+// source reads can sit on none of them. Collapsing the two would make
+// "project" mean "org", which is what the board's own filter used to do.
+type summaryProject struct {
+	// ID is the source-qualified project identity, "<source>#<number>".
+	// The empty string is the bucket of work on no board at all, which is
+	// a real answer rather than a gap and so gets a row of its own.
+	ID     string `json:"id"`
+	Title  string `json:"title,omitempty"`
+	Source string `json:"source,omitempty"`
+	Items  int    `json:"items"`
+}
+
 // summaryClaim is one held item, reduced to what a widget renders.
 type summaryClaim struct {
 	ID      core.WorkItemID `json:"id"`
@@ -60,6 +77,7 @@ type workSummary struct {
 	Total       int              `json:"total"`
 	Adaptors    []adaptorSummary `json:"adaptors"`
 	Sources     []summarySource  `json:"sources"`
+	Projects    []summaryProject `json:"projects"`
 	ByStatus    map[string]int   `json:"by_status"`
 	ByReadiness map[string]int   `json:"by_readiness,omitempty"`
 	ByClaim     map[string]int   `json:"by_claim,omitempty"`
@@ -119,6 +137,7 @@ func (r *Router) workSummary(w http.ResponseWriter, req *http.Request) {
 		ByClaim:     map[string]int{},
 		Claimed:     []summaryClaim{},
 		Sources:     []summarySource{},
+		Projects:    []summaryProject{},
 		Adaptors:    []adaptorSummary{},
 	}
 
@@ -129,6 +148,7 @@ func (r *Router) workSummary(w http.ResponseWriter, req *http.Request) {
 	}
 
 	bySource := map[string]*summarySource{}
+	byProject := map[string]*summaryProject{}
 	var held []summaryClaim
 
 	for _, item := range items {
@@ -164,6 +184,25 @@ func (r *Router) workSummary(w http.ResponseWriter, req *http.Request) {
 			src.ObservedAt = o
 		}
 
+		// The project axis. An item on no board lands in the "" bucket
+		// rather than being left out: work nobody has filed is exactly
+		// what a project filter has to be able to show.
+		projectID := customString(item, "atab_project")
+		proj, ok := byProject[projectID]
+		if !ok {
+			proj = &summaryProject{ID: projectID}
+			if projectID != "" {
+				// A project id is already source-qualified, so its source
+				// is one value. The unfiled bucket spans every source and
+				// is left unattributed rather than credited to whichever
+				// one happened to be counted first.
+				proj.Source = sourceID
+				proj.Title = customString(item, "atab_project_title")
+			}
+			byProject[projectID] = proj
+		}
+		proj.Items++
+
 		// Only work something is actually holding goes in the list.
 		// Expired and released claims are counted in ByClaim, where the
 		// number is the useful part; listing them would fill a widget
@@ -188,6 +227,18 @@ func (r *Router) workSummary(w http.ResponseWriter, req *http.Request) {
 	// Stable order, so a widget polling this does not reshuffle its rows
 	// between two identical answers.
 	sort.Slice(out.Sources, func(i, j int) bool { return out.Sources[i].ID < out.Sources[j].ID })
+	for _, proj := range byProject {
+		out.Projects = append(out.Projects, *proj)
+	}
+	// Named boards first, in id order; the unfiled bucket last, because
+	// it is the leftover rather than a board.
+	sort.Slice(out.Projects, func(i, j int) bool {
+		a, b := out.Projects[i].ID, out.Projects[j].ID
+		if (a == "") != (b == "") {
+			return b == ""
+		}
+		return a < b
+	})
 	sort.Slice(held, func(i, j int) bool { return held[i].ID < held[j].ID })
 
 	if len(held) > summaryClaimCap {

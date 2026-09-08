@@ -90,7 +90,21 @@ const (
 	FieldKeyClaimState = "atab_claim_state"
 	// FieldKeyClaimedBy names the holder, or is absent when nothing holds
 	// the issue. A column bound to this reads as "Claimed by".
-	FieldKeyClaimedBy    = "atab_claimed_by"
+	FieldKeyClaimedBy = "atab_claimed_by"
+	// FieldKeyProject is the qualified identity of the Projects v2 board
+	// this issue sits on: "<source>#<number>". It is the project axis,
+	// and it is deliberately not the source: a source is an org plus a
+	// credential and a repository allowlist, while a project is one board
+	// inside it. Absent when the issue is on no board, which is a real
+	// and common answer rather than a gap.
+	FieldKeyProject = "atab_project"
+	// FieldKeyProjectTitle is the board's own name, as GitHub spells it.
+	FieldKeyProjectTitle = "atab_project_title"
+	// FieldKeyProjects lists every board the issue was observed on, not
+	// only the source's configured one. An issue can sit on a team board
+	// and a portfolio board at once, and a filter that knew only about
+	// the configured board would call such an item unfiled.
+	FieldKeyProjects     = "atab_projects"
 	FieldKeyBoardStatus  = "atab_board_status"
 	FieldKeyPriority     = "atab_priority"
 	FieldKeyArea         = "atab_area"
@@ -155,6 +169,9 @@ func Manifest(transport core.Transport) core.CapabilityManifest {
 			{Name: FieldKeyGraph, Type: "object", Description: "Immediate graph: blockers, dependents, parent, children, provenance. Single-item reads only."},
 			{Name: FieldKeyClaimState, Type: "string", Description: "One of active, stale, expired, claiming, none, unknown."},
 			{Name: FieldKeyClaimedBy, Type: "string", Description: "Claim holder login. Absent when nothing holds the issue."},
+			{Name: FieldKeyProject, Type: "string", Description: "Qualified Projects v2 board identity, <source>#<number>. Absent when the issue is on no board."},
+			{Name: FieldKeyProjectTitle, Type: "string", Description: "Projects v2 board title as GitHub spells it."},
+			{Name: FieldKeyProjects, Type: "object", Description: "Every Projects v2 board the issue was observed on, each with id, number and title."},
 			{Name: FieldKeyBoardStatus, Type: "string", Description: "Raw project-board Status option."},
 			{Name: FieldKeyPriority, Type: "string", Description: "Project-board Priority option."},
 			{Name: FieldKeyArea, Type: "string", Description: "Project-board Area option."},

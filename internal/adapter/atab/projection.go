@@ -199,6 +199,62 @@ func (p *Projector) blockerResolver(snap Snapshot) func(IssueRef) BlockerState {
 	}
 }
 
+// projects renders every board the issue was observed on, source-
+// qualified, with the configured board first.
+//
+// The configured board leads because it is the one whose Status and
+// Priority this projection reads, so a filter defaulting to the first
+// entry lands on the board the card's columns already come from. The
+// rest follow in the order GitHub returned them, deduplicated by number
+// so an issue with two rows on one board counts once.
+func (p *Projector) projects(issue Issue) []map[string]any {
+	refs := issue.Projects
+	// An older snapshot, or a fixture written before the project axis
+	// existed, carries only the configured row. Deriving the list from it
+	// keeps a restored board filterable instead of showing every card as
+	// unfiled until the next full fetch.
+	if len(refs) == 0 && issue.ProjectItem != nil {
+		refs = []ProjectRef{{
+			Number: issue.ProjectItem.ProjectNumber,
+			Title:  issue.ProjectItem.ProjectTitle,
+		}}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+
+	ordered := make([]ProjectRef, 0, len(refs))
+	seen := make(map[int]bool, len(refs))
+	if p.cfg.ProjectNumber != 0 {
+		for _, ref := range refs {
+			if ref.Number == p.cfg.ProjectNumber && !seen[ref.Number] {
+				seen[ref.Number] = true
+				ordered = append(ordered, ref)
+			}
+		}
+	}
+	for _, ref := range refs {
+		if ref.Number == 0 || seen[ref.Number] {
+			continue
+		}
+		seen[ref.Number] = true
+		ordered = append(ordered, ref)
+	}
+
+	out := make([]map[string]any, 0, len(ordered))
+	for _, ref := range ordered {
+		entry := map[string]any{
+			"id":     ref.QualifiedProjectID(p.cfg.ID),
+			"number": ref.Number,
+		}
+		if ref.Title != "" {
+			entry["title"] = ref.Title
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 // boardStatus reads the source's Status field off the project row, and
 // returns "" when the issue is not on the board.
 func (p *Projector) boardStatus(issue Issue) string {
@@ -384,6 +440,17 @@ func (p *Projector) custom(
 			"done":  done,
 			"items": criteria,
 		},
+	}
+	// The project axis. It is qualified by source for the same reason
+	// work item ids are: two orgs both run a project #1, and an
+	// unqualified "#1" would merge two boards into one filter button.
+	if projects := p.projects(issue); len(projects) > 0 {
+		out[FieldKeyProjects] = projects
+		primary := projects[0]
+		out[FieldKeyProject], _ = primary["id"].(string)
+		if title, _ := primary["title"].(string); title != "" {
+			out[FieldKeyProjectTitle] = title
+		}
 	}
 	if readiness.Reason != "" {
 		out[FieldKeyReadyReason] = readiness.Reason
