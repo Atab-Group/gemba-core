@@ -112,12 +112,14 @@ neither was available to the task that wrote this plugin:
 
 One thing worth knowing, because it looks like a third option and is not.
 `dashboard widget_put` accepts a `pluginKind` it has never heard of and
-returns success: putting `gemba:summary` on a board succeeded at
-revision 1 on an install where no plugin registers that kind. The Control
-UI resolves plugin widget kinds against a registry bundled with the client
-(`session:progress` on a stock install, plus kinds from enabled plugins),
-so an unregistered kind stores fine and renders as unavailable. **A
-successful `widget_put` is not evidence of a rendering panel.**
+returns success. Putting `gemba:summary` on a board succeeded at
+revision 1 on an install where no plugin registers that kind, and the
+cell then renders as **"Widget from disabled plugin gemba"** with a
+Delete button and no content, checked in a browser against the Control
+UI. The Control UI resolves plugin widget kinds against a registry
+bundled with the client, so an unregistered kind stores fine and cannot
+draw anything. **A successful `widget_put` is not evidence of a rendering
+panel.**
 
 The other extension point, for a panel that owns its own rendering rather
 than being agent-authored HTML, is `api.registerBoardWidgetContentKind`.
@@ -130,7 +132,9 @@ than shipping the binding that a verified `show_widget` call can consume.
 
 Verified: the projection and its bounds, by unit test; the shape of
 `/api/work-summary`, against the live endpoint; that the manifest matches
-the documented `openclaw.plugin.json` dashboard contract.
+the documented `openclaw.plugin.json` dashboard contract; and, in a
+browser, that an unregistered `pluginKind` stores and then refuses to
+render.
 
 Not verified: this plugin loading in a Gateway, the binding appearing in
 the capability registry, and the panel rendering on a board. All three

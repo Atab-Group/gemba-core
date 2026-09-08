@@ -338,6 +338,91 @@ Purging is deleting the state directory. That is the operator's move
 when access was withdrawn rather than interrupted, and nothing else
 removes a stored board.
 
+## The project axis
+
+A source is an org plus a credential plus a repository allowlist. A
+project is one Projects v2 board inside it. The two are different
+questions and the board asks both, on two filter rows.
+
+That distinction is not pedantry here. `Atab-Group` declares nine
+repositories holding 2539 issues; its project #1 carries 1608 of them and
+1095 sit on no board at all. The unfiled bucket is the third largest
+thing on the dashboard, and a filter that only knew about orgs could not
+show it. Until this landed, the row labelled "Project" was filtering by
+source, so it offered one button per org and answered a question nobody
+was asking.
+
+The projection carries three fields:
+
+| Field | What it holds |
+| --- | --- |
+| `atab_project` | The primary board, source-qualified: `atab-group#1`. Absent when the issue is on no board. |
+| `atab_project_title` | The board's own name, as GitHub spells it. |
+| `atab_projects` | Every board the issue was observed on, each with `id`, `number` and `title`. |
+
+Ids are source-qualified for the same reason work item ids are: two orgs
+both run a project #1, and an unqualified `#1` would merge two boards
+into one filter button.
+
+The configured board leads the list, because that is the board whose
+`Status` and `Priority` the card already shows. The rest follow in the
+order GitHub returned them. An issue on two boards is reachable from
+either, which is why the per-board counts can sum to more than the total
+and why `All` carries its own count rather than a sum.
+
+`GET /api/work-summary` reports the same axis under `projects`, with the
+unfiled bucket last and unattributed: it spans every source, so crediting
+it to one would be a lie.
+
+## Issue history
+
+`GET /api/work-items/{id}/activity` returns one backwards page of the
+item's real GitHub timeline: comments, closes and reopens, label and
+assignee changes, renames, cross-references and milestone moves, each
+with its actor, its instant and a link to its own record on GitHub.
+
+It is a different read from everything else here. The board is a
+snapshot on a timer; a history is unbounded and nobody needs one until
+they open an item. So it is fetched on demand, paged, and never cached
+into the snapshot.
+
+The bounded twenty-comment tail the projection carries exists for lease
+and evidence detection. **It is not a history.** The response reports
+`has_older` and `at_oldest` separately so that distinction survives to
+the screen: only `at_oldest` licenses a reader to treat what they are
+looking at as the whole record. The panel prints one of two sentences
+accordingly, and never infers completeness from an empty cursor.
+
+Paging runs backwards, newest first, because that is the end a reader
+opens a history at. GitHub's `timelineItems` connection pages forward
+from the beginning, so the query uses `last:` with `before:`.
+
+```
+GET /api/work-items/{id}/activity?limit=30
+GET /api/work-items/{id}/activity?before=<older_cursor>&limit=30
+```
+
+The route is offered through the optional `core.ActivityReader`
+interface rather than through `WorkPlane`. A history is expensive and
+most backends keep no event log, so requiring it of every adaptor would
+hand each one a method it could not implement. A plane that does not
+implement it gets `501 unsupported`, which a reader can tell apart from
+an item nobody has touched.
+
+Three failure states are distinct on the wire and on screen, because
+rendering any of them as an empty feed would be a lie about the item:
+
+| State | Wire | What the panel says |
+| --- | --- | --- |
+| Nothing has happened | `200`, `events: []` | Nothing has happened since it was opened |
+| The adaptor keeps no history | `501 unsupported` | This board's adaptor does not fetch history |
+| GitHub would not answer | the tagged kind, e.g. `rate_limited` | Names the cause; the throttle case says it will answer again |
+
+A throttled read surfaces as `rate_limited`. The shared error mapper
+gives every read surface `500` for that kind, so the status code is
+`500` while the envelope's `error` is the useful part; the panel branches
+on the code.
+
 ## A summary for an external widget
 
 `GET /api/work-summary` is a fixed-size read-only surface: totals by
@@ -492,7 +577,21 @@ test fails when the two drift.
   repositories at the end of the source's list were simply missing.
 - **Comment tails are bounded.** Lease detection reads the last 20
   comments on an issue and evidence reads the last 20 on a pull request.
-  A lease buried under more than 20 later comments is not seen.
+  A lease buried under more than 20 later comments is not seen. This is
+  the tail on the card and is not the history: the Activity panel reads
+  the timeline live, and says which of the two a reader is looking at.
+- **A history page costs GraphQL budget.** Opening an item spends one
+  query, and each Load older spends another, against the same credential
+  budget the board refresh uses. Pages are capped at 100 events and
+  default to 30 for that reason.
+- **The timeline is filtered.** An unfiltered GitHub timeline includes
+  subscription, mention and deployment events that would fill every page
+  before a human comment appeared, so the query names its item types. An
+  event of a type this build did not ask for still renders, saying what
+  it was, rather than leaving a gap.
+- **Comment bodies render as text.** They are arbitrary content anybody
+  in the org can write, and the history panel is not the place to add an
+  HTML sink, so markdown is not rendered there.
 - **The verifier marker is provisional.** Verdicts are read from a
   `<!-- atab-verify -->` comment. The org's current Land gate reads a
   self-check block in the PR body instead, so a PR without that comment

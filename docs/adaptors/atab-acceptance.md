@@ -27,10 +27,11 @@ mutate a GitHub issue, a project row or a comment.
 | ----------------------------- | ----------------------------- |
 | `go build ./...`              | exit 0                        |
 | `go vet ./...`                | exit 0                        |
-| `go test ./...`               | exit 0, 117 packages ok       |
+| `go test ./...`               | exit 0, 127 packages ok       |
 | `golangci-lint run ./...`     | exit 0, 0 issues              |
 | `gofmt -l`                    | clean                         |
-| `vitest run` (web)            | exit 0, 117 files, 1051 tests |
+| `go test -race` (atab, server, cli, config) | exit 0           |
+| `vitest run` (web)            | exit 0, 124 files, 1119 tests |
 | `tsc --noEmit`                | exit 0                        |
 | `eslint src --max-warnings=0` | exit 0                        |
 
@@ -85,6 +86,26 @@ before projecting and the federated sort is stable, so items sharing an
 **The health surface answers while a source is unwell.** A refresh does
 not hold the state lock across the network call, so a crawl running for
 the better part of a minute cannot stall the probe that explains it.
+
+**A bounded history is never rendered as a whole one.** The activity page
+reports `has_older` and `at_oldest` separately and the panel's
+completeness line reads the second. An empty next cursor is not evidence
+that a reader has seen everything, and the twenty-comment tail on the
+card is not a history at all.
+
+**A history that could not be read says so.** Three states stay distinct
+end to end: an item nobody has touched (`200`, empty array), an adaptor
+with no event log (`501 unsupported`), and a backend that refused
+(the tagged kind, `rate_limited` most often here). Rendering any of them
+as an empty feed would be a claim about the item that the board cannot
+support.
+
+**An optional surface survives the shader.** The decorator between the
+server and every adaptor forwards `core.ActivityReader` only when the
+inner adaptor has one, and a test asserts the wrapped atab plane still
+carries it. This one was found on a deployed binary rather than in a
+test: the wrapper dropped the interface and the route answered "this
+adaptor keeps no history" against a board that reads it.
 
 ## Recovery
 
@@ -143,11 +164,23 @@ not a defect:
 So a board's item count is larger than what the source sees whenever the
 org has more repositories than the source declares. Reconcile by
 comparing like with like: count the projected items carrying a row on
-the source's own board (`atab_board_status` present) rather than
-comparing the board's total against the source's total.
+the source's own board rather than comparing the board's total against
+the source's total.
+
+`GET /api/work-summary` now does that arithmetic. Its `projects` array
+splits the board along the project axis, and the entries sum to the
+total: on this deployment 1608 on `atab-group#1`, 82 on
+`hadedahealth#1`, 1095 on no board, 2785 in all. The unfiled bucket is
+the reconciliation gap made countable, and it is the third largest group
+on the dashboard.
 
 ## Limitations
 
+- **A history page costs GraphQL budget.** Opening an item spends one
+  query and each Load older spends another, against the same credential
+  budget the board refresh uses. When that budget is exhausted the board
+  still serves from its stored snapshot, but the history cannot be read
+  at all and says so.
 - **A walk is a view, not a transaction.** Offsets index a list that a
   refresh can move underneath them, so an item can be missed or repeated
   across a page boundary. The window is well under a second against a
