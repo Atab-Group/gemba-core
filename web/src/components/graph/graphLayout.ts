@@ -50,6 +50,36 @@ const ROW_HEIGHT = 80;
 const LAYER_PADDING = 40;
 
 /**
+ * MAX_COLUMNS wraps a wide layer into several rows.
+ *
+ * A layer is a set of nodes at the same dependency depth, and nothing
+ * says a hundred of them have to sit in one line. Laid out flat, the
+ * live board's widest layer was 30880 pixels across, and the overview's
+ * ten tiles were 2280, both of which fit to a viewport at a zoom where
+ * the text is unreadable. Wrapping keeps the depth ordering, which is
+ * the thing the layout is for, and bounds the width to something a
+ * screen can hold at a legible zoom.
+ */
+const MAX_COLUMNS = 12;
+const MIN_COLUMNS = 3;
+
+export interface LayoutOptions {
+  /**
+   * maxColumns caps how many nodes sit side by side before a layer
+   * wraps. The page derives it from the canvas width, because the right
+   * number of columns is however many fit at a zoom somebody can read
+   * at, and that is a property of the viewport rather than the graph.
+   */
+  maxColumns?: number;
+}
+
+/** columnsFor turns a canvas width into a column cap. */
+export function columnsFor(canvasWidth: number): number {
+  if (!Number.isFinite(canvasWidth) || canvasWidth <= 0) return MAX_COLUMNS;
+  return Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, Math.floor(canvasWidth / COLUMN_WIDTH)));
+}
+
+/**
  * layoutLayered places nodes row by row from their condensation depth.
  *
  * Only structural edges are passed in: `relates_to` and extension edges
@@ -58,8 +88,10 @@ const LAYER_PADDING = 40;
  */
 export function layoutLayered(
   nodes: LayoutNodeInput[],
-  structuralEdges: DirectedEdge[]
+  structuralEdges: DirectedEdge[],
+  options: LayoutOptions = {}
 ): LayoutResult {
+  const columnCap = Math.max(1, options.maxColumns ?? MAX_COLUMNS);
   const ids = nodes.map((n) => n.id);
   if (ids.length === 0) {
     return { positions: new Map(), width: 0, height: 0, layers: 0 };
@@ -86,21 +118,25 @@ export function layoutLayered(
 
   const positions = new Map<string, { x: number; y: number }>();
   let maxCols = 0;
-  for (let row = 0; row < layers.length; row++) {
-    const bucket = layers[row];
-    if (bucket.length > maxCols) maxCols = bucket.length;
-    for (let col = 0; col < bucket.length; col++) {
-      positions.set(bucket[col], {
-        x: col * COLUMN_WIDTH + LAYER_PADDING,
-        y: row * ROW_HEIGHT + LAYER_PADDING,
+  let visualRow = 0;
+  for (const bucket of layers) {
+    const cols = Math.min(columnCap, Math.max(1, bucket.length));
+    if (cols > maxCols) maxCols = cols;
+    for (let i = 0; i < bucket.length; i++) {
+      positions.set(bucket[i], {
+        x: (i % cols) * COLUMN_WIDTH + LAYER_PADDING,
+        y: (visualRow + Math.floor(i / cols)) * ROW_HEIGHT + LAYER_PADDING,
       });
     }
+    // A wrapped layer occupies as many visual rows as it needed, plus
+    // one blank row so the next depth still reads as a separate band.
+    visualRow += Math.max(1, Math.ceil(bucket.length / cols)) + (bucket.length > cols ? 1 : 0);
   }
 
   return {
     positions,
     width: maxCols * COLUMN_WIDTH + LAYER_PADDING * 2,
-    height: layers.length * ROW_HEIGHT + LAYER_PADDING * 2,
+    height: visualRow * ROW_HEIGHT + LAYER_PADDING * 2,
     layers: layers.length,
   };
 }

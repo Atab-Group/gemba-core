@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { componentDepths, condense } from '../scc';
-import { layoutLayered } from '../graphLayout';
+import { columnsFor, layoutLayered } from '../graphLayout';
 
 function edges(pairs: [string, string][]) {
   return pairs.map(([from, to]) => ({ from, to }));
@@ -88,9 +88,30 @@ describe('layoutLayered under cycles', () => {
 
     const layout = layoutLayered(ids.map((id) => ({ id })), edges(pairs));
     expect(layout.layers).toBeLessThanOrEqual(ids.length);
-    // Every node is in one cycle here, so they share a single row.
+    // Every node is in one cycle here, so there is one dependency layer.
     expect(layout.layers).toBe(1);
-    expect(layout.height).toBeLessThan(200);
+    // That layer wraps into a band rather than a 200-wide line, so the
+    // canvas stays a shape a viewport can frame. The old relaxation put
+    // this input in thousands of rows.
+    expect(layout.width).toBeLessThan(3000);
+    expect(layout.height).toBeLessThan(2000);
+  });
+
+  // Wrapping must not disturb the thing the layout is for: a node at a
+  // greater dependency depth still sits below one at a lesser depth.
+  it('keeps a wrapped layer above the layer that depends on it', () => {
+    const wide = Array.from({ length: 40 }, (_, i) => `w${String(i).padStart(2, '0')}`);
+    const pairs: [string, string][] = wide.map((id) => [id, 'sink']);
+    const layout = layoutLayered(
+      [...wide, 'sink'].map((id) => ({ id })),
+      edges(pairs)
+    );
+    const sinkY = layout.positions.get('sink')!.y;
+    for (const id of wide) {
+      expect(layout.positions.get(id)!.y).toBeLessThan(sinkY);
+    }
+    // 40 nodes wrap rather than forming a 40-wide line.
+    expect(layout.width).toBeLessThan(3000);
   });
 
   it('keeps a plain chain at its real depth', () => {
@@ -124,5 +145,34 @@ describe('layoutLayered under cycles', () => {
     );
     expect(layout.layers).toBe(2);
     expect(layout.positions.has('ghost')).toBe(false);
+  });
+});
+
+describe('columnsFor', () => {
+  // The column cap is a property of the viewport, not the graph: the
+  // right number of nodes side by side is however many fit at a zoom
+  // somebody can read at.
+  it('scales the column cap with the canvas', () => {
+    expect(columnsFor(2600)).toBe(11);
+    expect(columnsFor(1200)).toBe(5);
+  });
+
+  // Below three columns a wrapped layer becomes a column, which is a
+  // worse shape than a slightly-too-wide row.
+  it('never goes below three columns', () => {
+    expect(columnsFor(300)).toBe(3);
+    expect(columnsFor(0)).toBe(12);
+  });
+
+  it('falls back to the default when the canvas is unmeasured', () => {
+    expect(columnsFor(Number.POSITIVE_INFINITY)).toBe(12);
+  });
+
+  it('wraps to the cap it is given', () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `g${i}`);
+    const layout = layoutLayered(ids.map((id) => ({ id })), [], { maxColumns: 3 });
+    expect(layout.width).toBeLessThanOrEqual(3 * 220 + 80);
+    const rows = new Set([...layout.positions.values()].map((p) => p.y));
+    expect(rows.size).toBe(4);
   });
 });

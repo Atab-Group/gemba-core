@@ -71,7 +71,7 @@ import {
 } from '@/components/board/source';
 import { WorkItemNode, type WorkItemNodeData } from '@/components/graph/WorkItemNode';
 import { criticalPath, detectCycles, edgeKey } from '@/components/graph/graphAnalysis';
-import { layoutLayered } from '@/components/graph/graphLayout';
+import { columnsFor, layoutLayered } from '@/components/graph/graphLayout';
 import {
   DEFAULT_BUDGET,
   MAX_DEPTH,
@@ -117,6 +117,10 @@ const CLUSTER_PREFIX = 'cluster:';
 // tells nobody anything. It earns its place once the canvas is big
 // enough to get lost in.
 const MINIMAP_MIN_NODES = 40;
+// FIT_MAX_FRAMES bounds the wait for React Flow to accept a new node
+// set. Two or three frames is the normal case; the cap is what stops a
+// canvas that never populates from scheduling frames forever.
+const FIT_MAX_FRAMES = 20;
 const GRAPH_SEARCH_PARAM = 'q';
 
 function statesFromQuery(p: URLSearchParams): StateCategory[] {
@@ -439,9 +443,14 @@ export function GraphPage() {
     [nodeIds, model.structuralEdges]
   );
 
+  // The column cap comes from the canvas, not the graph: the right
+  // number of nodes side by side is however many fit at a zoom somebody
+  // can read at. Ten tiles in one line fitted to 0.27 on a half-width
+  // panel, which is a picture of nothing.
+  const maxColumns = useMemo(() => columnsFor(canvasWidth), [canvasWidth]);
   const layout = useMemo(
-    () => layoutLayered(nodeIds.map((id) => ({ id })), model.structuralEdges),
-    [nodeIds, model.structuralEdges]
+    () => layoutLayered(nodeIds.map((id) => ({ id })), model.structuralEdges, { maxColumns }),
+    [nodeIds, model.structuralEdges, maxColumns]
   );
 
   const focusOnNode = useCallback((id: string) => {
@@ -501,13 +510,34 @@ export function GraphPage() {
   const viewSignature = `${mode}|${focusedId ?? ''}|${depth}|${nodeIds.length}`;
   const lastFitSignature = useRef('');
   useEffect(() => {
-    if (nodeIds.length === 0) return;
+    const expected = nodeIds.length;
+    if (expected === 0) return;
     if (lastFitSignature.current === viewSignature) return;
-    lastFitSignature.current = viewSignature;
-    // Deferred one frame so React Flow has the new nodes in its store
-    // before the camera is asked to bracket them.
-    const id = requestAnimationFrame(() => fitOverview());
-    return () => cancelAnimationFrame(id);
+
+    // The fit has to wait for React Flow to have the nodes in its own
+    // store, and one frame is not reliably enough: fitView against an
+    // empty store is a silent no-op, which is how the camera ended up
+    // parked at scale 1 on a canvas ten screens wide. So the attempt
+    // repeats until the store agrees with what was handed to it, and
+    // gives up after a few frames rather than spinning.
+    let frame = 0;
+    let handle = 0;
+    const attempt = () => {
+      const inst = instanceRef.current;
+      // A renderer that cannot report its nodes is taken at its word and
+      // fitted straight away; only a store that answers and disagrees is
+      // worth waiting on.
+      const ready =
+        inst && (typeof inst.getNodes !== 'function' || inst.getNodes().length >= expected);
+      if (ready) {
+        lastFitSignature.current = viewSignature;
+        fitOverview();
+        return;
+      }
+      if (frame++ < FIT_MAX_FRAMES) handle = requestAnimationFrame(attempt);
+    };
+    handle = requestAnimationFrame(attempt);
+    return () => cancelAnimationFrame(handle);
   }, [fitOverview, nodeIds.length, viewSignature]);
 
   // gm-sfbh (post-RHP migration): mirror the legacy onClose behavior —
@@ -705,8 +735,13 @@ export function GraphPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="graph-page">
-      <header className="flex items-start justify-between border-b border-neutral-200 px-8 py-4 dark:border-neutral-800">
-        <div>
+      {/* The header wraps rather than overflowing. Without it the title
+          block and the toolbar overlap on a narrow canvas, and the
+          controls underneath the description are unclickable: the depth
+          buttons were sitting under the paragraph at 1280px wide with
+          the side panel open. */}
+      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-neutral-200 px-8 py-4 dark:border-neutral-800">
+        <div className="min-w-0">
           <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
             <Network className="h-5 w-5" aria-hidden />
             Graph
@@ -715,7 +750,7 @@ export function GraphPage() {
             Dependency graph across visible work. Click a node to drill in.
           </p>
         </div>
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           <button
             type="button"
             onClick={stepBack}
@@ -1009,7 +1044,10 @@ export function GraphPage() {
                 onOverview={() => setMode('overview')}
               />
             </Panel>
-            <Panel position="bottom-left">
+            {/* Bottom-right, because the layout grows down and to the
+                right from the top-left origin, so a bottom-left legend
+                sits on top of the first nodes it is meant to explain. */}
+            <Panel position="bottom-right">
               <Legend
                 cycles={cycles.sccs.length}
                 criticalLength={critical.length}
