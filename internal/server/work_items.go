@@ -88,6 +88,12 @@ func (r *Router) listWorkItems(w http.ResponseWriter, req *http.Request) {
 		hasMore = true
 	}
 
+	// total is this page's length, and deliberately not the size of the
+	// filtered set. The handler asks the adaptor for exactly one item
+	// more than the page needs, which is what makes has_more exact; a
+	// pre-pagination count would need an unbounded read on every
+	// request, which is the cost paging exists to avoid. A caller that
+	// wants the size of the whole board reads /api/work-summary.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":    items,
 		"total":    len(items),

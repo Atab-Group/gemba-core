@@ -697,3 +697,50 @@ func TestListWorkItems_NegativeOffsetReturns400(t *testing.T) {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
+
+// total is this page's length, not the size of the filtered set. The
+// distinction matters because a caller reading it as a set size would
+// see a page size and stop walking, which is exactly the truncation the
+// paging work was done to remove.
+func TestListWorkItems_TotalIsThePageLength(t *testing.T) {
+	all := make([]core.WorkItem, 0, 25)
+	for i := 0; i < 25; i++ {
+		all = append(all, core.WorkItem{
+			ID: core.WorkItemID(fmt.Sprintf("gm-%02d", i)), Kind: "task",
+			Title: "item", Status: "open", StateCategory: core.StateBacklog,
+		})
+	}
+	host := newProgrammableHostFull(t, nil,
+		func(_ context.Context, f core.WorkItemFilter) ([]core.WorkItem, error) {
+			if f.Limit > 0 && f.Limit < len(all) {
+				return all[:f.Limit], nil
+			}
+			return all, nil
+		})
+	h := NewRouter(config.ServeConfig{}, fakeSPA(), host)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/work-items?limit=5", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Items   []core.WorkItem `json:"items"`
+		Total   int             `json:"total"`
+		HasMore bool            `json:"has_more"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Items) != 5 {
+		t.Fatalf("items = %d, want the page of 5", len(env.Items))
+	}
+	if env.Total != len(env.Items) {
+		t.Errorf("total = %d, want it to equal the page length %d", env.Total, len(env.Items))
+	}
+	// has_more is the field a caller walks on, and it has to be exact.
+	if !env.HasMore {
+		t.Error("has_more = false with 20 items still unread")
+	}
+}

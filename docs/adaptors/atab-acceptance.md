@@ -181,6 +181,11 @@ on the dashboard.
   budget the board refresh uses. When that budget is exhausted the board
   still serves from its stored snapshot, but the history cannot be read
   at all and says so.
+- **`total` on the list is this page's length.** The handler asks the
+  adaptor for exactly one item more than the page needs, which is what
+  makes `has_more` exact and is also why it cannot report the size of the
+  filtered set without an unbounded read per request. Walk on `has_more`;
+  read `/api/work-summary` for a count of the whole board.
 - **A walk is a view, not a transaction.** Offsets index a list that a
   refresh can move underneath them, so an item can be missed or repeated
   across a page boundary. The window is well under a second against a

@@ -10,11 +10,19 @@ import type { ActivityPage, AgentRef, DefinitionOfDone, WorkItem } from '@/types
 
 // ListWorkItemsEnvelope is the wire shape the gm-peg list handler emits.
 // The server normalises nil slices so `items` is always a JSON array,
-// never null. `total` is the pre-pagination count of items (M1.3 has
-// no pagination so it equals items.length, but callers MUST NOT assume
-// that once filtering / pagination lands).
+// never null.
+//
+// `total` is the length of THIS page, not the size of the filtered set.
+// The handler asks the adaptor for one item more than the page needs and
+// no more, which is what makes `has_more` exact, and it is also why the
+// handler cannot know a pre-pagination count without an unbounded read
+// on every request. Use `has_more` to decide whether to keep walking and
+// `/api/work-summary` for a count of the whole board; a caller that
+// treats `total` as the size of the set will read a page size instead.
 export interface ListWorkItemsEnvelope {
   items: WorkItem[];
+  // total is the length of this page. See the note above: it is not the
+  // size of the filtered set.
   total: number;
   // offset is the index this page started at, echoed back so a caller
   // walking the list does not have to track it itself.
@@ -122,7 +130,8 @@ export async function listWorkItems(filter?: WorkItemListFilter): Promise<WorkIt
 }
 
 // listWorkItemsEnvelope — same fetch, but surfaces the full envelope for
-// callers that need `total` (pagination counts, empty-state copy).
+// callers that need the raw envelope. Note that `total` is this page's
+// length rather than the size of the set.
 export async function listWorkItemsEnvelope(
   filter?: WorkItemListFilter
 ): Promise<ListWorkItemsEnvelope> {
