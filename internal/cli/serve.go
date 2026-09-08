@@ -183,6 +183,10 @@ authentication. Binding a non-loopback interface without --auth is an error.`,
 	cmd.Flags().StringVar(&cfg.ATABFixture, "atab-fixture", "",
 		"path to a recorded ATAB fixture to replay instead of calling GitHub; "+
 			"stands the dashboard up with no network and no credential")
+	cmd.Flags().StringSliceVar(&cfg.CORSAllowedOrigins, "cors-allowed-origins", nil,
+		"exact origins allowed to call /api/* cross-origin (repeatable). Off by "+
+			"default; set it only for a known first-party surface such as a "+
+			"dashboard widget, never a wildcard")
 	cmd.Flags().StringVar(&cfg.ATABStateDir, "atab-state-dir", "",
 		"directory to keep each source's snapshot in between runs, so a restart "+
 			"serves the last board it read (marked stale) rather than nothing "+

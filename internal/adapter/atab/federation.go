@@ -371,7 +371,18 @@ func (r *Registry) getWorkItem(ctx context.Context, id core.WorkItemID) (core.Wo
 		}
 	}
 	snap.CrossSource = r.crossSourceResolver(entries, snaps)
-	return e.projector.ProjectOne(snap, issue), nil
+	item := e.projector.ProjectOne(snap, issue)
+
+	// The neighbourhood is attached here and not on the list path. It
+	// needs the source's edges inverted to answer "what does finishing
+	// this release", which is one pass over the snapshot: cheap once for
+	// the item a person opened, and quadratic if it were done for every
+	// card on a board of a few thousand.
+	if item.Custom == nil {
+		item.Custom = map[string]any{}
+	}
+	item.Custom[FieldKeyGraph] = NewGraphBuilder(e.cfg, snap).Neighbourhood(issue)
+	return item, nil
 }
 
 func joinComma(in []string) string {

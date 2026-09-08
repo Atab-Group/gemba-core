@@ -439,6 +439,10 @@ func NewRouter(cfg config.ServeConfig, spa fs.FS, host *api.Host) *Router {
 		// `gemba doctor` and the initial-load bootstrap when the
 		// EventSource errors before the first frame lands.
 		api.Get("/adaptors", r.adaptorsHealth)
+		// A small fixed-size read-only surface for an external status
+		// widget. Counting the board client-side would mean fetching
+		// megabytes on every poll to render a handful of numbers.
+		api.Get("/work-summary", r.workSummary)
 		api.Get("/adaptors/stream", r.adaptorsStream)
 
 		// Capability manifests for both registered planes. The SPA reads

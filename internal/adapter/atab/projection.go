@@ -417,6 +417,35 @@ func (p *Projector) custom(
 			"fresh":    lease.Fresh(p.now().UTC()),
 		}
 	}
+	// The claim protocol answer, kept apart from the GitHub assignee
+	// throughout: the assignee says who owns the issue, the claim says
+	// whether a worker is holding it this minute.
+	claim := ClaimOf(issue, snap.Freshness, p.now().UTC())
+	out[FieldKeyClaimState] = string(claim.State)
+	if claim.Holder != "" {
+		out[FieldKeyClaimedBy] = claim.Holder
+	}
+	claimOut := map[string]any{
+		"state":  string(claim.State),
+		"reason": claim.Reason,
+	}
+	if claim.Holder != "" {
+		claimOut["holder"] = claim.Holder
+	}
+	if claim.Instance != "" {
+		claimOut["instance"] = claim.Instance
+	}
+	if !claim.Expires.IsZero() {
+		claimOut["expires"] = claim.Expires.UTC().Format(time.RFC3339)
+	}
+	if !claim.LastHeartbeat.IsZero() {
+		claimOut["last_heartbeat"] = claim.LastHeartbeat.UTC().Format(time.RFC3339)
+	}
+	if claim.Released {
+		claimOut["released"] = true
+	}
+	out[FieldKeyClaim] = claimOut
+
 	if len(meta.RequiresEnv) > 0 {
 		names := make([]string, 0, len(meta.RequiresEnv))
 		for _, r := range meta.RequiresEnv {

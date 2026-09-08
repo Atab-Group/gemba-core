@@ -66,16 +66,31 @@ var StateMap = core.StateMap{
 // declared as a FieldExtension so the SPA knows it exists and which
 // renderer to reach for.
 const (
-	FieldKeySource       = "atab_source"
-	FieldKeySourceOrg    = "atab_source_org"
-	FieldKeyRepo         = "atab_repo"
-	FieldKeyIssueNumber  = "atab_issue_number"
-	FieldKeyType         = "atab_type"
-	FieldKeyAutonomy     = "atab_autonomy"
-	FieldKeyCriteria     = "atab_acceptance_criteria"
-	FieldKeyReadiness    = "atab_readiness"
-	FieldKeyReadyReason  = "atab_readiness_reason"
-	FieldKeyLease        = "atab_lease"
+	FieldKeySource      = "atab_source"
+	FieldKeySourceOrg   = "atab_source_org"
+	FieldKeyRepo        = "atab_repo"
+	FieldKeyIssueNumber = "atab_issue_number"
+	FieldKeyType        = "atab_type"
+	FieldKeyAutonomy    = "atab_autonomy"
+	FieldKeyCriteria    = "atab_acceptance_criteria"
+	FieldKeyReadiness   = "atab_readiness"
+	FieldKeyReadyReason = "atab_readiness_reason"
+	FieldKeyLease       = "atab_lease"
+	// FieldKeyClaim carries the whole claim protocol answer: state,
+	// holder, instance, expiry and last heartbeat. It is separate from
+	// the GitHub assignee, which stays on the core Assignee field.
+	FieldKeyClaim = "atab_claim"
+	// FieldKeyGraph carries the issue's immediate neighbourhood:
+	// blockers, dependents, parent, children and provenance, each with
+	// the state of the edge. Present on a single-item read only.
+	FieldKeyGraph = "atab_graph"
+	// FieldKeyClaimState is the same answer reduced to one token, for a
+	// card or a table column that has room for a chip rather than a
+	// struct.
+	FieldKeyClaimState = "atab_claim_state"
+	// FieldKeyClaimedBy names the holder, or is absent when nothing holds
+	// the issue. A column bound to this reads as "Claimed by".
+	FieldKeyClaimedBy    = "atab_claimed_by"
 	FieldKeyBoardStatus  = "atab_board_status"
 	FieldKeyPriority     = "atab_priority"
 	FieldKeyArea         = "atab_area"
@@ -136,6 +151,10 @@ func Manifest(transport core.Transport) core.CapabilityManifest {
 			{Name: FieldKeyReadiness, Type: "string", Description: "Readiness state derived by the ready_select rules."},
 			{Name: FieldKeyReadyReason, Type: "string", Description: "Why the item holds its readiness state."},
 			{Name: FieldKeyLease, Type: "string", Description: "Active atab-lease holder, distinct from the GitHub assignee."},
+			{Name: FieldKeyClaim, Type: "object", Description: "Claim protocol state: holder, instance, expiry, last heartbeat."},
+			{Name: FieldKeyGraph, Type: "object", Description: "Immediate graph: blockers, dependents, parent, children, provenance. Single-item reads only."},
+			{Name: FieldKeyClaimState, Type: "string", Description: "One of active, stale, expired, claiming, none, unknown."},
+			{Name: FieldKeyClaimedBy, Type: "string", Description: "Claim holder login. Absent when nothing holds the issue."},
 			{Name: FieldKeyBoardStatus, Type: "string", Description: "Raw project-board Status option."},
 			{Name: FieldKeyPriority, Type: "string", Description: "Project-board Priority option."},
 			{Name: FieldKeyArea, Type: "string", Description: "Project-board Area option."},
