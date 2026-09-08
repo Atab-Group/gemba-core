@@ -135,6 +135,13 @@ func applyBeadsURLDefault(cfg *config.ServeConfig) error {
 		// BeadsURLSource=="default" so leaving this empty is correct.
 		return nil
 	}
+	if cfg.ATAB {
+		// The ATAB adaptor reads GitHub, not Beads. Resolving a Beads
+		// URL here would point the cold-start gate at a Dolt database
+		// this run never opens, and a stray local "gemba" database would
+		// then get to decide whether a GitHub-backed board binds at all.
+		return nil
+	}
 
 	ucfg, err := config.LoadUserConfig(cfg.ConfigPath)
 	if err != nil {

@@ -11,7 +11,7 @@
 // stream incremental graph patches — at 1000 nodes the recompute is
 // well under a frame budget thanks to the O(V+E) analysis passes.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -21,10 +21,13 @@ import {
   ChevronDown,
   Filter,
   Layers,
+  Minus,
   Network,
+  Plus,
   RotateCcw,
   Route as RouteIcon,
-  Wand2,
+  Target,
+  X,
 } from 'lucide-react';
 import { STATE_CATEGORIES, type StateCategory, type WorkItem } from '@/types/core.gen';
 import ReactFlow, {
@@ -54,10 +57,32 @@ import {
   filterByScope,
   type ScopeID,
 } from '@/components/board/scope';
+import {
+  PROJECT_ALL,
+  filterByProject,
+  listProjectOptions,
+  type ProjectID,
+} from '@/components/board/project';
+import {
+  SOURCE_ALL,
+  filterBySource,
+  repoFilterID,
+  type SourceID,
+} from '@/components/board/source';
 import { WorkItemNode, type WorkItemNodeData } from '@/components/graph/WorkItemNode';
-import { buildGraph } from '@/components/graph/buildGraph';
 import { criticalPath, detectCycles, edgeKey } from '@/components/graph/graphAnalysis';
-import { layoutLayered } from '@/components/graph/graphLayout';
+import { columnsFor, layoutLayered } from '@/components/graph/graphLayout';
+import {
+  DEFAULT_BUDGET,
+  MAX_DEPTH,
+  MIN_DEPTH,
+  buildGraphModel,
+  clampDepth,
+  drawnSignature,
+  parseMode,
+  resolveMode,
+  type GraphMode,
+} from '@/components/graph/graphModel';
 import { useHotkey, useHotkeyScope } from '@/hotkeys';
 import { cn } from '@/lib/utils';
 
@@ -84,15 +109,23 @@ const EXTENSION_EDGE_STYLE = { stroke: '#8b5cf6', strokeDasharray: '2 4' };
 const HIGHLIGHT_CYCLE = '#dc2626';
 const HIGHLIGHT_CRITICAL = '#f59e0b';
 
-// gm-vubw: density-UX threshold. Below this zoom the items view is
-// unreadable (a 320-node real workspace lands at ~0.02), so when the
-// operator hasn't taken manual control of the granularity toggle we
-// auto-flip to 'epics' aggregation. Picked at 0.3 because below it
-// nodes render under ~60px wide on a 200px layout — too small to
-// read titles. Above it items stay individually legible.
-const AUTO_GRANULARITY_ZOOM_THRESHOLD = 0.3;
 const NARROW_CANVAS_WIDTH = 420;
-const NARROW_CANVAS_OVERVIEW_ZOOM = 0.9;
+// CLUSTER_PREFIX marks an overview node. It has to match the id
+// aggregate.ts mints, and it is the one place the page distinguishes a
+// tile from an item.
+const CLUSTER_PREFIX = 'cluster:';
+// A minimap of a dozen tiles is chrome that costs a render pass and
+// tells nobody anything. It earns its place once the canvas is big
+// enough to get lost in.
+const MINIMAP_MIN_NODES = 40;
+// FIT_MAX_FRAMES bounds the wait for React Flow to accept a new node
+// set. Two or three frames is the normal case; the cap is what stops a
+// canvas that never populates from scheduling frames forever.
+const FIT_MAX_FRAMES = 20;
+// FIT_SETTLE_FRAMES is the wait after the node count matches, for React
+// Flow to apply the new positions. A resize keeps the count identical,
+// so without this the fit runs against the previous arrangement.
+const FIT_SETTLE_FRAMES = 2;
 const GRAPH_SEARCH_PARAM = 'q';
 
 function statesFromQuery(p: URLSearchParams): StateCategory[] {
@@ -118,7 +151,6 @@ export function GraphPage() {
   // the selection without inspecting the React Flow viewport state.
   const instanceRef = useRef<ReactFlowInstance | null>(null);
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
-  const [focusedId, setFocusedId] = useState<string | null>(null);
   const [canvasWidth, setCanvasWidth] = useState(Number.POSITIVE_INFINITY);
   // gm-sfbh (post-RHP): the legacy WorkItemDrawer's onClose used to
   // clear focusedId + re-fit the camera in one step (Escape, ×, click-
@@ -134,32 +166,91 @@ export function GraphPage() {
   // data-hover-related on each affected node and edge. Hover state
   // is ephemeral — leaves the DOM as soon as the pointer moves off.
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  // gm-ndb6: granularity toggle. 'items' (default) renders one node
-  // per WorkItem; 'epics' rolls every WorkItem up to its enclosing
-  // Epic. Edges between cross-Epic items aggregate to Epic→Epic
-  // edges via deriveAggregatedItems below.
-  const [granularity, setGranularity] = useState<'items' | 'epics'>('items');
-  // gm-vubw: when granularityOverride is false the effective view is
-  // driven by zoom — under AUTO_GRANULARITY_ZOOM_THRESHOLD we render
-  // epics so a 300-node workspace shows readable units instead of
-  // microscopic dots. Once the operator clicks the toggle we set
-  // override=true and stop auto-flipping; the operator can re-enable
-  // auto via the Auto button.
-  const [granularityOverride, setGranularityOverride] = useState(false);
-  const [currentZoom, setCurrentZoom] = useState(1);
+  // The view is carried in the URL, so a graph is linkable: mode, the
+  // focused item, the depth of the walk and every filter. It also means
+  // there is exactly one source of truth for what is drawn, which is
+  // what removes the old zoom-reads-camera-writes-granularity loop.
+  const project: ProjectID = params.get('project') ?? PROJECT_ALL;
+  const source: SourceID = params.get('source') ?? SOURCE_ALL;
+  const urlFocus: string | null = params.get('focus');
+  const depth = clampDepth(params.get('depth'));
+  const requestedMode = parseMode(params.get('graph'));
   const milestone: MilestoneID = params.get('milestone') ?? MILESTONE_ALL;
   const scope: ScopeID = params.get('scope') ?? SCOPE_ALL;
   const stateFilters = useMemo(() => statesFromQuery(params), [params]);
   const kindFilters = useMemo(() => kindsFromQuery(params), [params]);
   const search = params.get(GRAPH_SEARCH_PARAM) ?? '';
 
+  // The functional form matters here, and it is not a style choice.
+  // The RHP owns query keys of its own and writes them from a snapshot
+  // it captured at render. Two writes in one tick from two components
+  // that both hold the query string means the second silently discards
+  // the first, which is how clicking a node used to open the detail tab
+  // and lose the focus it had just set. Composing against the latest
+  // value instead of a captured one removes the lost update.
   const updateParams = useCallback(
     (mutate: (next: URLSearchParams) => void) => {
-      const next = new URLSearchParams(params);
-      mutate(next);
-      setParams(next, { replace: true });
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          mutate(next);
+          return next;
+        },
+        { replace: true }
+      );
     },
-    [params, setParams]
+    [setParams]
+  );
+  // Focus is held in state and mirrored to the URL, rather than read
+  // straight back out of it.
+  //
+  // Two components write this query string: the graph and the RHP, and a
+  // node click asks both to write in the same tick. React Router's
+  // setter resolves against the value captured at the last render, even
+  // in its functional form, so whichever write lands second discards the
+  // other's key. Clicking a node either opened the detail tab or set the
+  // focus, depending on the order.
+  //
+  // Publishing from an effect instead moves the graph's write after the
+  // commit, so it composes onto whatever the RHP just wrote. The ref
+  // records what this page published, which is what keeps the two
+  // directions from chasing each other: a URL change the page did not
+  // make is adopted, and one it did make is ignored.
+  const [focusedId, setFocusedIdState] = useState<string | null>(urlFocus);
+  const publishedFocusRef = useRef<string | null>(urlFocus);
+
+  useEffect(() => {
+    if (urlFocus === publishedFocusRef.current) return;
+    publishedFocusRef.current = urlFocus;
+    setFocusedIdState(urlFocus);
+  }, [urlFocus]);
+
+  useEffect(() => {
+    if (focusedId === publishedFocusRef.current) return;
+    publishedFocusRef.current = focusedId;
+    updateParams((p) => {
+      if (focusedId) {
+        p.set('focus', focusedId);
+        p.set('graph', 'focus');
+      } else {
+        p.delete('focus');
+        if (parseMode(p.get('graph')) === 'focus') p.delete('graph');
+      }
+    });
+  }, [focusedId, updateParams]);
+
+  const setFocusedId = useCallback((id: string | null) => {
+    setFocusedIdState(id);
+  }, []);
+
+  const setProject = useCallback(
+    (next: ProjectID) => {
+      updateParams((p) => {
+        if (next === PROJECT_ALL) p.delete('project');
+        else p.set('project', next);
+      });
+    },
+    [updateParams]
   );
   const setMilestone = useCallback(
     (nextMilestone: MilestoneID) => {
@@ -208,6 +299,8 @@ export function GraphPage() {
   );
   const clearFilters = useCallback(() => {
     updateParams((next) => {
+      next.delete('project');
+      next.delete('source');
       next.delete('milestone');
       next.delete('scope');
       next.delete('state_category');
@@ -217,7 +310,13 @@ export function GraphPage() {
   }, [updateParams]);
 
   const filteredItems = useMemo(() => {
-    let out = filterByScope(filterByMilestone(items, milestone), scope);
+    // Project and source narrow first, and they narrow before the graph
+    // is built rather than after. They are the filters that actually cut
+    // a company board down to something drawable, and applying them at
+    // the end would mean paying for the whole graph to throw most of it
+    // away.
+    let out = filterBySource(filterByProject(items, project), source);
+    out = filterByScope(filterByMilestone(out, milestone), scope);
     if (stateFilters.length > 0) {
       const allowed = new Set(stateFilters);
       out = out.filter((it) => allowed.has(it.state_category));
@@ -233,23 +332,133 @@ export function GraphPage() {
       );
     }
     return out;
-  }, [items, milestone, scope, stateFilters, kindFilters, search]);
+  }, [items, project, source, milestone, scope, stateFilters, kindFilters, search]);
   const filtersActive =
+    project !== PROJECT_ALL ||
+    source !== SOURCE_ALL ||
     milestone !== MILESTONE_ALL ||
     scope !== SCOPE_ALL ||
     stateFilters.length > 0 ||
     kindFilters.length > 0 ||
     search.trim().length > 0;
   const narrowCanvas = canvasWidth < NARROW_CANVAS_WIDTH;
-  const effectiveGranularity = useMemo<'items' | 'epics'>(() => {
-    if (granularityOverride) return granularity;
-    return narrowCanvas || currentZoom < AUTO_GRANULARITY_ZOOM_THRESHOLD
-      ? 'epics'
-      : 'items';
-  }, [granularity, granularityOverride, currentZoom, narrowCanvas]);
-  const renderItems = useMemo(
-    () => (effectiveGranularity === 'epics' ? deriveAggregatedItems(filteredItems) : filteredItems),
-    [effectiveGranularity, filteredItems]
+
+  // The mode decides what is drawn, and it is decided here on plain
+  // data rather than after mounting a canvas and measuring its zoom.
+  // That ordering is the fix: the old page rendered every filtered item,
+  // fitted the camera, read the resulting zoom and only then concluded
+  // the view was too dense, so the expensive render always happened and
+  // the decision fed back into the thing that produced it.
+  // resolveMode reads the focus state rather than the URL so the view
+  // flips on the click, not one render later when the mirror lands.
+  const mode = useMemo(
+    () => resolveMode(focusedId ? null : requestedMode, focusedId, filteredItems.length),
+    [requestedMode, focusedId, filteredItems.length]
+  );
+
+  const setMode = useCallback(
+    (next: GraphMode) => {
+      updateParams((p) => {
+        p.set('graph', next);
+        if (next !== 'focus') p.delete('focus');
+      });
+    },
+    [updateParams]
+  );
+
+  const setDepth = useCallback(
+    (next: number) => {
+      updateParams((p) => {
+        p.set('depth', String(Math.min(MAX_DEPTH, Math.max(MIN_DEPTH, next))));
+      });
+    },
+    [updateParams]
+  );
+
+  // A narrow canvas gets a tighter budget for the same reason a wide one
+  // gets a loose one: the cap exists to keep nodes legible, and fewer
+  // pixels means fewer legible nodes.
+  const budget = useMemo(
+    () =>
+      narrowCanvas
+        ? { maxNodes: 60, maxEdges: 120 }
+        : DEFAULT_BUDGET,
+    [narrowCanvas]
+  );
+
+  // Manifest projection — the in-app type drops a couple of optional
+  // fields the codegen carries, so we pass it through `as` instead of
+  // exporting yet another shape. buildGraph only reads adaptor_name +
+  // edge_extensions, both of which are present on both shapes.
+  const manifest = useMemo(
+    () =>
+      workPlane
+        ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (workPlane as any)
+        : null,
+    [workPlane]
+  );
+
+  // One memo produces everything drawn. Hover and pan do not touch its
+  // inputs, so neither recomputes it.
+  const model = useMemo(
+    () =>
+      buildGraphModel({
+        items: filteredItems,
+        manifest,
+        mode,
+        focusId: focusedId,
+        depth,
+        budget,
+      }),
+    [filteredItems, manifest, mode, focusedId, depth, budget]
+  );
+
+  // A cluster id is "cluster:<source>/<owner>/<repo>", which is exactly
+  // the pair of filters that narrows the board to that tile's contents.
+  // Drilling in sets them and drops to items, so the overview is a way
+  // into the graph rather than a dead end.
+  const drillIntoCluster = useCallback(
+    (clusterId: string) => {
+      const rest = clusterId.slice(CLUSTER_PREFIX.length);
+      const slash = rest.indexOf('/');
+      if (slash < 0) return;
+      const clusterSource = rest.slice(0, slash);
+      const repo = rest.slice(slash + 1);
+      updateParams((p) => {
+        p.set('graph', 'scope');
+        p.delete('focus');
+        if (clusterSource && clusterSource !== 'repo' && clusterSource !== 'source') {
+          p.set('source', repoFilterID(clusterSource, repo));
+        }
+      });
+    },
+    [updateParams]
+  );
+
+  const nodeIds = useMemo(() => model.nodes.map((n) => n.id), [model.nodes]);
+
+  const cycles = useMemo(
+    () => detectCycles(nodeIds, model.structuralEdges),
+    [nodeIds, model.structuralEdges]
+  );
+
+  const critical = useMemo(
+    () => criticalPath(nodeIds, model.structuralEdges),
+    [nodeIds, model.structuralEdges]
+  );
+
+  // The column cap comes from the canvas, not the graph: the right
+  // number of nodes side by side is however many fit at a zoom somebody
+  // can read at. Ten tiles in one line fitted to 0.27 on a half-width
+  // panel, which is a picture of nothing.
+  const maxColumns = useMemo(
+    () => columnsFor(canvasWidth, nodeIds.length),
+    [canvasWidth, nodeIds.length]
+  );
+  const layout = useMemo(
+    () => layoutLayered(nodeIds.map((id) => ({ id })), model.structuralEdges, { maxColumns }),
+    [nodeIds, model.structuralEdges, maxColumns]
   );
 
   const focusOnNode = useCallback((id: string) => {
@@ -275,36 +484,6 @@ export function GraphPage() {
     void inst.fitView();
   }, []);
 
-  // Manifest projection — the in-app type drops a couple of optional
-  // fields the codegen carries, so we pass it through `as` instead of
-  // exporting yet another shape. buildGraph only reads adaptor_name +
-  // edge_extensions, both of which are present on both shapes.
-  const manifest = useMemo(
-    () =>
-      workPlane
-        ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (workPlane as any)
-        : null,
-    [workPlane]
-  );
-
-  const graph = useMemo(() => buildGraph(renderItems, manifest), [renderItems, manifest]);
-
-  const cycles = useMemo(
-    () => detectCycles(graph.nodeIds, graph.structuralEdges),
-    [graph.nodeIds, graph.structuralEdges]
-  );
-
-  const critical = useMemo(
-    () => criticalPath(graph.nodeIds, graph.structuralEdges),
-    [graph.nodeIds, graph.structuralEdges]
-  );
-
-  const layout = useMemo(
-    () => layoutLayered(graph.nodeIds.map((id) => ({ id })), graph.structuralEdges),
-    [graph.nodeIds, graph.structuralEdges]
-  );
-
   useEffect(() => {
     const el = canvasHostRef.current;
     if (!el) return;
@@ -322,98 +501,79 @@ export function GraphPage() {
     return () => observer.disconnect();
   }, []);
 
-  // ReactFlow's `fitView` prop only fits once on mount. When the
-  // initial render happens during the items-loading phase, ReactFlow
-  // mounts with nodes=[] and parks its camera at the empty origin —
-  // when items finally arrive the new nodes can land outside the
-  // viewport and the canvas looks blank. Re-fit when the *raw* item
-  // count first becomes non-zero (or changes between loads). gm-vubw:
-  // we deliberately key off raw items, not graph.nodeIds — flipping
-  // granularity changes the node count too, but it should preserve
-  // the operator's zoom intent rather than re-fit.
-  const lastFitCount = useRef(0);
-  // gm-vubw: programmatic fitView fires onMove with no sourceEvent.
-  // The flag lets onMove ignore the auto-fit's emitted zoom event so
-  // currentZoom only tracks operator-initiated zoom/pan.
-  const suppressMoveZoom = useRef(false);
+  // One fit, on one signal.
+  //
+  // There used to be four overlapping effects here, one of which read
+  // the camera's zoom back into the granularity decision that changed
+  // the node set that triggered the fit. Fitting is now keyed on a
+  // signature of what is drawn, so it happens exactly when the drawn
+  // set changes and never in response to the operator's own pan or
+  // zoom. Nothing reads the camera at all.
   const fitOverview = useCallback(() => {
     const inst = instanceRef.current;
     if (!inst) return;
-    if (narrowCanvas && graph.nodeIds.length > 0) {
-      const centerFirstNode = () => {
-        const node = inst.getNode(graph.nodeIds[0]);
-        if (!node) return false;
-        const w = node.width ?? 200;
-        const h = node.height ?? 60;
-        const zoom = Math.min(
-          NARROW_CANVAS_OVERVIEW_ZOOM,
-          Math.max(0.6, (canvasWidth - 16) / w)
-        );
-        suppressMoveZoom.current = true;
-        void inst.setCenter(node.position.x + w / 2, node.position.y + h / 2, {
-          zoom,
-        });
-        suppressMoveZoom.current = false;
-        return true;
-      };
-      if (!centerFirstNode()) {
-        requestAnimationFrame(() => {
-          centerFirstNode();
-        });
+    // minZoom on the fit, not just on the canvas. A set too large to
+    // frame legibly is better shown legibly and panned than shown whole
+    // as a grey smear; the banner already says how much there is, and
+    // the minimap appears once there is enough to get lost in.
+    void inst.fitView({ padding: 0.15, maxZoom: 1.2, minZoom: 0.45 });
+  }, []);
+
+  // The signature covers what is drawn, not how much of it. Keying on
+  // the count alone missed two everyday cases: a filter change that
+  // happens to leave the same number of items, and a resize, which
+  // reflows the layout into a different number of columns without
+  // changing a node. Both left the camera framing a picture that had
+  // moved out from under it.
+  const viewSignature = useMemo(
+    () => `${mode}|${focusedId ?? ''}|${depth}|${drawnSignature(nodeIds, maxColumns)}`,
+    [mode, focusedId, depth, nodeIds, maxColumns]
+  );
+  const lastFitSignature = useRef('');
+  useEffect(() => {
+    const expected = nodeIds.length;
+    if (expected === 0) return;
+    if (lastFitSignature.current === viewSignature) return;
+
+    // Two separate waits, because two different things go wrong.
+    //
+    // First, React Flow has to have the node set: fitView against a
+    // store that has not received it is a silent no-op, which is how the
+    // camera ended up parked at scale 1 on a canvas ten screens wide.
+    // Waiting for the count covers that.
+    //
+    // Second, the count is not enough on its own. A resize reflows the
+    // layout without changing a single node, so the count matches on the
+    // first frame and the fit runs against positions React Flow has not
+    // applied yet, framing the arrangement that just went away. Two
+    // further frames after the count settles let the new positions land.
+    let frame = 0;
+    let handle = 0;
+    const fitNow = () => {
+      lastFitSignature.current = viewSignature;
+      fitOverview();
+    };
+    const settle = (remaining: number) => {
+      if (remaining === 0) {
+        fitNow();
+        return;
       }
-      return;
-    }
-    suppressMoveZoom.current = true;
-    void inst.fitView({ padding: 0.1 });
-    suppressMoveZoom.current = false;
-  }, [canvasWidth, graph.nodeIds, narrowCanvas]);
-
-  useEffect(() => {
-    const count = items.length;
-    if (count > 0 && count !== lastFitCount.current) {
-      const isFirstFit = lastFitCount.current === 0;
-      lastFitCount.current = count;
-      // Defer to the next paint so React Flow has translated the new
-      // nodes into its internal store before we ask for a fit.
-      const id = requestAnimationFrame(() => {
-        const inst = instanceRef.current;
-        if (!inst) return;
-        fitOverview();
-        // gm-vubw: capture the post-fit zoom on first fit so the
-        // auto-granularity decision sees the real fitted zoom (the
-        // 320-node workspace lands at ~0.02). On later fits we
-        // already know the camera is bracketing the operator's view.
-        if (isFirstFit) {
-          const vp = inst.getViewport?.();
-          if (vp && typeof vp.zoom === 'number') setCurrentZoom(vp.zoom);
-        }
-      });
-      return () => cancelAnimationFrame(id);
-    }
-  }, [fitOverview, items.length]);
-
-  useEffect(() => {
-    if (items.length === 0 || granularityOverride) return;
-    const id = requestAnimationFrame(() => fitOverview());
-    return () => cancelAnimationFrame(id);
-  }, [effectiveGranularity, fitOverview, granularityOverride, items.length]);
-
-  const graphNodeSignature = graph.nodeIds.join('\u0000');
-  useEffect(() => {
-    if (items.length === 0) return;
-    if (focusedId && !graph.nodeIds.includes(focusedId)) {
-      setFocusedId(null);
-    }
-    if (graph.nodeIds.length === 0) return;
-    const id = requestAnimationFrame(() => fitOverview());
-    return () => cancelAnimationFrame(id);
-  }, [fitOverview, focusedId, graph.nodeIds, graph.nodeIds.length, graphNodeSignature, items.length]);
-
-  useEffect(() => {
-    if (!narrowCanvas || items.length === 0 || graph.nodeIds.length === 0) return;
-    const id = window.setTimeout(() => fitOverview(), 50);
-    return () => window.clearTimeout(id);
-  }, [effectiveGranularity, fitOverview, graph.nodeIds.length, items.length, narrowCanvas]);
+      handle = requestAnimationFrame(() => settle(remaining - 1));
+    };
+    const attempt = () => {
+      const inst = instanceRef.current;
+      // A renderer that cannot report its nodes is taken at its word.
+      const counted =
+        inst && (typeof inst.getNodes !== 'function' || inst.getNodes().length >= expected);
+      if (counted) {
+        settle(FIT_SETTLE_FRAMES);
+        return;
+      }
+      if (frame++ < FIT_MAX_FRAMES) handle = requestAnimationFrame(attempt);
+    };
+    handle = requestAnimationFrame(attempt);
+    return () => cancelAnimationFrame(handle);
+  }, [fitOverview, nodeIds.length, viewSignature]);
 
   // gm-sfbh (post-RHP migration): mirror the legacy onClose behavior —
   // when the workitem detail tab transitions from open to closed
@@ -433,7 +593,7 @@ export function GraphPage() {
     if (!focusedId) return;
     setFocusedId(null);
     fitAll();
-  }, [focusedId, hasWorkItemDetailTab, fitAll]);
+  }, [focusedId, hasWorkItemDetailTab, fitAll, setFocusedId]);
 
   // gm-e12.20: traversal indices. successors/predecessors are derived
   // once per render from the structural-edge slice (the same set the
@@ -443,24 +603,24 @@ export function GraphPage() {
   // disables it (the operator falls back to clicking).
   const successors = useMemo(() => {
     const m = new Map<string, string[]>();
-    for (const e of graph.structuralEdges) {
+    for (const e of model.structuralEdges) {
       const list = m.get(e.from) ?? [];
       list.push(e.to);
       m.set(e.from, list);
     }
     for (const list of m.values()) list.sort();
     return m;
-  }, [graph.structuralEdges]);
+  }, [model.structuralEdges]);
   const predecessors = useMemo(() => {
     const m = new Map<string, string[]>();
-    for (const e of graph.structuralEdges) {
+    for (const e of model.structuralEdges) {
       const list = m.get(e.to) ?? [];
       list.push(e.from);
       m.set(e.to, list);
     }
     for (const list of m.values()) list.sort();
     return m;
-  }, [graph.structuralEdges]);
+  }, [model.structuralEdges]);
 
   // History stack of focused-node ids. Used by the back hotkey to
   // prefer the most-recently-visited predecessor when the current
@@ -480,7 +640,7 @@ export function GraphPage() {
       setFocusedId(id);
       focusOnNode(id);
     },
-    [focusOnNode, recordVisit]
+    [focusOnNode, recordVisit, setFocusedId]
   );
 
   // canStepNext mirrors the next hotkey's enable rule for the
@@ -534,37 +694,49 @@ export function GraphPage() {
   const hoverRelated = useMemo(() => {
     if (!hoveredId) return null;
     const set = new Set<string>([hoveredId]);
-    for (const e of graph.edges) {
+    for (const e of model.edges) {
       if (e.from === hoveredId) set.add(e.to);
       if (e.to === hoveredId) set.add(e.from);
     }
     return set;
-  }, [hoveredId, graph.edges]);
+  }, [hoveredId, model.edges]);
 
   const nodes = useMemo<Node<WorkItemNodeData>[]>(() => {
-    return renderItems.map((it) => {
-      const pos = layout.positions.get(it.id) ?? { x: 0, y: 0 };
-      const inCycle = highlightCycles && cycles.nodeIds.has(it.id);
-      const onCriticalPath = criticalMode && critical.nodeIds.has(it.id);
-      const hoverRelatedNode = hoverRelated?.has(it.id) ?? false;
+    return model.nodes.map((n) => {
+      const pos = layout.positions.get(n.id) ?? { x: 0, y: 0 };
       return {
-        id: it.id,
+        id: n.id,
         type: 'workItem',
         position: pos,
         data: {
-          id: it.id,
-          title: it.title,
-          stateCategory: it.state_category,
-          inCycle,
-          onCriticalPath,
-          hoverRelated: hoverRelatedNode,
+          id: n.id,
+          title: n.title,
+          stateCategory: n.stateCategory,
+          inCycle: highlightCycles && cycles.nodeIds.has(n.id),
+          onCriticalPath: criticalMode && critical.nodeIds.has(n.id),
+          hoverRelated: hoverRelated?.has(n.id) ?? false,
+          shape: n.shape,
+          subtitle: n.subtitle,
+          count: n.count,
+          blocked: n.blocked,
+          hops: n.hops,
+          direction: n.direction,
+          isFocus: n.isFocus,
         },
       };
     });
-  }, [renderItems, layout.positions, cycles.nodeIds, critical.nodeIds, highlightCycles, criticalMode, hoverRelated]);
+  }, [
+    model.nodes,
+    layout.positions,
+    cycles.nodeIds,
+    critical.nodeIds,
+    highlightCycles,
+    criticalMode,
+    hoverRelated,
+  ]);
 
   const edges = useMemo<Edge[]>(() => {
-    return graph.edges.map((e) => {
+    return model.edges.map((e) => {
       const baseStyle = e.isExtension
         ? EXTENSION_EDGE_STYLE
         : EDGE_STYLE[e.kind] ?? EDGE_STYLE.relates_to;
@@ -594,12 +766,17 @@ export function GraphPage() {
         },
       };
     });
-  }, [graph.edges, cycles.edgeKeys, critical.edgeKeys, highlightCycles, criticalMode]);
+  }, [model.edges, cycles.edgeKeys, critical.edgeKeys, highlightCycles, criticalMode]);
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="graph-page">
-      <header className="flex items-start justify-between border-b border-neutral-200 px-8 py-4 dark:border-neutral-800">
-        <div>
+      {/* The header wraps rather than overflowing. Without it the title
+          block and the toolbar overlap on a narrow canvas, and the
+          controls underneath the description are unclickable: the depth
+          buttons were sitting under the paragraph at 1280px wide with
+          the side panel open. */}
+      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-neutral-200 px-8 py-4 dark:border-neutral-800">
+        <div className="min-w-0">
           <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
             <Network className="h-5 w-5" aria-hidden />
             Graph
@@ -608,7 +785,7 @@ export function GraphPage() {
             Dependency graph across visible work. Click a node to drill in.
           </p>
         </div>
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           <button
             type="button"
             onClick={stepBack}
@@ -649,6 +826,8 @@ export function GraphPage() {
           <GraphFilterMenu
             items={items}
             filteredCount={filteredItems.length}
+            project={project}
+            onChangeProject={setProject}
             milestone={milestone}
             onChangeMilestone={setMilestone}
             scope={scope}
@@ -662,29 +841,77 @@ export function GraphPage() {
             filtersActive={filtersActive}
             onClear={clearFilters}
           />
-          <ToggleButton
-            active={effectiveGranularity === 'epics'}
-            onClick={() => {
-              // gm-vubw: any explicit click pins granularity — auto
-              // mode resumes only via the Auto button below. The new
-              // value flips off whatever is currently effective so the
-              // operator's click always changes the view.
-              setGranularity(effectiveGranularity === 'epics' ? 'items' : 'epics');
-              setGranularityOverride(true);
-            }}
-            testid="graph-toggle-granularity"
+          <ModeButton
+            mode="focus"
+            current={mode}
+            onSelect={setMode}
+            disabled={!focusedId}
+            icon={<Target className="h-3.5 w-3.5" />}
+            title={focusedId ? 'One item and its neighbourhood' : 'Click a node to focus one'}
+          >
+            Focus
+          </ModeButton>
+          <ModeButton
+            mode="scope"
+            current={mode}
+            onSelect={setMode}
+            icon={<Filter className="h-3.5 w-3.5" />}
+            title="The current filters, drawn as items"
+          >
+            Scope
+          </ModeButton>
+          <ModeButton
+            mode="overview"
+            current={mode}
+            onSelect={setMode}
             icon={<Layers className="h-3.5 w-3.5" />}
+            title="The whole board, grouped by repository"
           >
-            {effectiveGranularity === 'epics' ? 'Epics' : 'Items'}
-          </ToggleButton>
-          <ToggleButton
-            active={!granularityOverride}
-            onClick={() => setGranularityOverride(false)}
-            testid="graph-toggle-granularity-auto"
-            icon={<Wand2 className="h-3.5 w-3.5" />}
-          >
-            Auto
-          </ToggleButton>
+            Overview
+          </ModeButton>
+          {mode === 'focus' && focusedId ? (
+            <div
+              className="ml-1 inline-flex items-center gap-1 rounded-md border border-neutral-300 px-1.5 py-1 dark:border-neutral-700"
+              data-testid="graph-depth-control"
+            >
+              <span className="text-[10px] uppercase tracking-wide text-neutral-500">Depth</span>
+              <button
+                type="button"
+                data-testid="graph-depth-less"
+                aria-label="Show fewer hops"
+                disabled={depth <= MIN_DEPTH}
+                onClick={() => setDepth(depth - 1)}
+                className="rounded p-0.5 hover:bg-neutral-100 disabled:opacity-30 dark:hover:bg-neutral-800"
+              >
+                <Minus className="h-3 w-3" />
+              </button>
+              <span data-testid="graph-depth-value" className="w-3 text-center tabular-nums">
+                {depth}
+              </span>
+              <button
+                type="button"
+                data-testid="graph-depth-more"
+                aria-label="Show more hops"
+                disabled={depth >= MAX_DEPTH}
+                onClick={() => setDepth(depth + 1)}
+                className="rounded p-0.5 hover:bg-neutral-100 disabled:opacity-30 dark:hover:bg-neutral-800"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
+          ) : null}
+          {focusedId ? (
+            <button
+              type="button"
+              data-testid="graph-clear-focus"
+              onClick={() => setFocusedId(null)}
+              title="Clear the focused item"
+              className="inline-flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1.5 text-neutral-600 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span>Clear focus</span>
+            </button>
+          ) : null}
           <ToggleButton
             active={highlightCycles}
             onClick={() => setHighlightCycles((v) => !v)}
@@ -711,8 +938,12 @@ export function GraphPage() {
         className="relative min-h-0 flex-1"
         data-testid="graph-canvas-host"
         data-focused-node={focusedId ?? undefined}
-        data-granularity={effectiveGranularity}
-        data-granularity-auto={granularityOverride ? undefined : 'true'}
+        data-graph-mode={mode}
+        data-node-count={model.nodes.length}
+        data-edge-count={model.edges.length}
+        data-available-nodes={model.availableNodes}
+        data-columns={maxColumns}
+        data-canvas-width={Number.isFinite(canvasWidth) ? Math.round(canvasWidth) : undefined}
       >
         {error ? (
           <div className="m-8 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
@@ -724,6 +955,34 @@ export function GraphPage() {
           <div className="m-8 rounded-md border border-dashed border-neutral-300 p-8 text-center text-sm text-neutral-500 dark:border-neutral-700">
             No work items. The graph populates once the bound WorkPlane has
             something to draw.
+          </div>
+        ) : model.focusMissing ? (
+          <div
+            className="m-8 rounded-md border border-dashed border-amber-400 p-8 text-center text-sm text-amber-800 dark:border-amber-700 dark:text-amber-200"
+            data-testid="graph-focus-missing"
+          >
+            <p>
+              The focused item is not in the current filters, so there is nothing
+              to draw around it.
+            </p>
+            <div className="mt-3 flex justify-center gap-2">
+              <button
+                type="button"
+                data-testid="graph-focus-missing-clear-focus"
+                onClick={() => setFocusedId(null)}
+                className="rounded border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+              >
+                Clear focus
+              </button>
+              <button
+                type="button"
+                data-testid="graph-focus-missing-clear-filters"
+                onClick={clearFilters}
+                className="rounded border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+              >
+                Clear filters
+              </button>
+            </div>
           </div>
         ) : filteredItems.length === 0 ? (
           <div
@@ -753,63 +1012,84 @@ export function GraphPage() {
               instanceRef.current = instance;
             }}
             onNodeClick={(_evt, node) => {
-              // gm-sfbh: focus camera on the clicked node, then pop
-              // the RHP workitem detail tab. The two surfaces are
-              // independent — the tab can be closed via the rail ×;
-              // the focus persists until the operator clicks the canvas
-              // background to clear it.
+              // A cluster is not an item and has no detail to open.
+              // Clicking one drills into it: the source and repository
+              // it stands for become the filters, and the mode drops to
+              // items. That is the progressive expansion path from the
+              // overview down to a graph a person can read.
+              if (node.id.startsWith(CLUSTER_PREFIX)) {
+                drillIntoCluster(node.id);
+                return;
+              }
+              // gm-sfbh: pop the RHP workitem detail tab, then focus the
+              // clicked node. The two surfaces are independent — the tab
+              // can be closed via the rail ×; the focus persists until
+              // the operator clears it.
+              // The order is deliberate. Both writes touch the query
+              // string in the same tick, and the graph's is the one that
+              // composes onto the latest value, so it goes last.
               // gm-e12.20: route through moveFocus so the click also
               // appends to the back-history that ArrowLeft consults.
-              moveFocus(node.id);
               popDetail({ kind: 'workitem', id: node.id });
-            }}
-            onPaneClick={() => {
-              // gm-sfbh: clearing the selection re-fits the camera
-              // to the full graph and drops the focused-node marker.
-              setFocusedId(null);
-              fitAll();
+              moveFocus(node.id);
             }}
             onNodeMouseEnter={(_evt, node) => setHoveredId(node.id)}
             onNodeMouseLeave={() => setHoveredId(null)}
-            onMove={(_evt, viewport) => {
-              if (suppressMoveZoom.current) return;
-              setCurrentZoom(viewport.zoom);
-            }}
             // 1000-node DoD: panOnScroll keeps the canvas responsive
             // when the graph is bigger than the viewport, and the
             // minimap gives the operator something to navigate by
             // without paying for a full layout pass per render.
             panOnScroll
-            // A real workspace's layered layout (200–500 nodes) sprawls
-            // far wider than 1.0×: without dropping minZoom below the
-            // React Flow default (0.5) — and below the prior 0.1 that
-            // still wasn't enough at 320 nodes — fitView clamps and
-            // ends up framing a slice that doesn't include most nodes.
-            // The operator-perceived symptom is "graph is blank"; the
-            // actual symptom is "graph is way off-camera."
-            minZoom={0.02}
+            // 0.02 used to be necessary because the canvas could be a
+            // third of a million pixels across and fitView would
+            // otherwise frame a slice with nothing in it. The drawn set
+            // is bounded now, so the floor can be a zoom a person can
+            // actually read at. Anything below 0.2 is a grey smear.
+            minZoom={0.2}
             maxZoom={2}
           >
             <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
             <Controls showInteractive={false} />
-            <MiniMap
-              pannable
-              zoomable
-              ariaLabel="Graph minimap"
-              nodeStrokeWidth={2}
-              nodeColor={(node) => {
-                const data = node.data as WorkItemNodeData | undefined;
-                if (data?.inCycle) return HIGHLIGHT_CYCLE;
-                if (data?.onCriticalPath) return HIGHLIGHT_CRITICAL;
-                return '#d4d4d4';
-              }}
-            />
-            <Panel position="bottom-left">
+            {/* A minimap of a dozen tiles is chrome that costs a render
+                pass and tells nobody anything. It appears once the
+                canvas is big enough to get lost in. */}
+            {model.nodes.length > MINIMAP_MIN_NODES ? (
+              <MiniMap
+                pannable
+                zoomable
+                ariaLabel="Graph minimap"
+                nodeStrokeWidth={2}
+                nodeColor={(node) => {
+                  const data = node.data as WorkItemNodeData | undefined;
+                  if (data?.inCycle) return HIGHLIGHT_CYCLE;
+                  if (data?.onCriticalPath) return HIGHLIGHT_CRITICAL;
+                  return '#d4d4d4';
+                }}
+              />
+            ) : null}
+            <Panel position="top-left">
+              <GraphScopeBanner
+                mode={mode}
+                drawn={model.nodes.length}
+                available={model.availableNodes}
+                totalItems={model.totalItems}
+                nodesTruncated={model.nodesTruncated}
+                droppedEdges={model.droppedEdges}
+                canExpandDepth={model.canExpandDepth}
+                edgeCount={model.edges.length}
+                onExpandDepth={() => setDepth(depth + 1)}
+                onOverview={() => setMode('overview')}
+              />
+            </Panel>
+            {/* Bottom-right, because the layout grows down and to the
+                right from the top-left origin, so a bottom-left legend
+                sits on top of the first nodes it is meant to explain. */}
+            <Panel position="bottom-right">
               <Legend
                 cycles={cycles.sccs.length}
                 criticalLength={critical.length}
-                extensionEdgeKinds={graph.declaredExtensionEdgeKinds}
-                droppedUndeclared={graph.droppedUndeclared}
+                extensionEdgeKinds={model.declaredExtensionEdgeKinds}
+                droppedUndeclared={model.droppedUndeclared}
               />
             </Panel>
           </ReactFlow>
@@ -823,6 +1103,8 @@ export function GraphPage() {
 interface GraphFilterMenuProps {
   items: WorkItem[];
   filteredCount: number;
+  project: ProjectID;
+  onChangeProject: (next: ProjectID) => void;
   milestone: MilestoneID;
   onChangeMilestone: (next: MilestoneID) => void;
   scope: ScopeID;
@@ -840,6 +1122,8 @@ interface GraphFilterMenuProps {
 function GraphFilterMenu({
   items,
   filteredCount,
+  project,
+  onChangeProject,
   milestone,
   onChangeMilestone,
   scope,
@@ -856,12 +1140,16 @@ function GraphFilterMenu({
   const [open, setOpen] = useState(false);
   const milestones = buildMilestoneOptions(items);
   const scopes = buildScopeOptions(items);
+  // The project axis matters more here than anywhere: it is the filter
+  // that turns a company board into a graph small enough to draw.
+  const projects = useMemo(() => listProjectOptions(items), [items]);
   const kinds = useMemo(() => {
     const set = new Set<string>();
     for (const item of items) set.add(item.kind);
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [items]);
   const activeCount =
+    (project !== PROJECT_ALL ? 1 : 0) +
     (milestone !== MILESTONE_ALL ? 1 : 0) +
     (scope !== SCOPE_ALL ? 1 : 0) +
     stateFilters.length +
@@ -919,6 +1207,18 @@ function GraphFilterMenu({
           )}
         >
           <GraphMenuSection title="Scope">
+            {projects.length > 0 ? (
+              <GraphSelect
+                label="Project"
+                testid="graph-filter-project"
+                value={project}
+                onChange={onChangeProject}
+                options={projects.map((o) => ({
+                  value: o.id,
+                  label: o.kind === 'all' ? 'All projects' : `${o.label} (${o.count})`,
+                }))}
+              />
+            ) : null}
             <GraphSelect
               label="Milestone"
               testid="graph-filter-milestone"
@@ -1074,6 +1374,148 @@ function GraphCheckOption({
   );
 }
 
+interface GraphScopeBannerProps {
+  mode: GraphMode;
+  drawn: number;
+  available: number;
+  totalItems: number;
+  edgeCount: number;
+  nodesTruncated: boolean;
+  droppedEdges: number;
+  canExpandDepth: boolean;
+  onExpandDepth: () => void;
+  onOverview: () => void;
+}
+
+// GraphScopeBanner is the page saying what it is showing and what it is
+// not.
+//
+// A budget that silently drops two thousand items is indistinguishable
+// from a board that only has three hundred, and an operator who cannot
+// tell those apart will make a decision on the wrong number. So the
+// count is always on screen, and when something was cut the banner says
+// so and offers the next move rather than leaving the reader to guess
+// which control widens the view.
+function GraphScopeBanner({
+  mode,
+  drawn,
+  available,
+  totalItems,
+  edgeCount,
+  nodesTruncated,
+  droppedEdges,
+  canExpandDepth,
+  onExpandDepth,
+  onOverview,
+}: GraphScopeBannerProps) {
+  const noun = mode === 'overview' ? 'groups' : 'items';
+  return (
+    <div
+      data-testid="graph-scope-banner"
+      data-drawn={drawn}
+      data-available={available}
+      data-truncated={nodesTruncated ? 'true' : undefined}
+      className="rounded-md border border-neutral-300 bg-white/90 px-2.5 py-1.5 text-[11px] text-neutral-700 shadow-sm backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/90 dark:text-neutral-300"
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span data-testid="graph-scope-count" className="font-medium tabular-nums">
+          {nodesTruncated
+            ? `Showing ${drawn} of ${available} ${noun}`
+            : `${drawn} ${noun}`}
+        </span>
+        <span className="text-neutral-500 tabular-nums">{edgeCount} edges</span>
+        {mode === 'overview' ? (
+          <span className="text-neutral-500 tabular-nums">
+            grouping {totalItems} items
+          </span>
+        ) : null}
+        {droppedEdges > 0 ? (
+          <span
+            data-testid="graph-scope-dropped-edges"
+            className="text-amber-700 tabular-nums dark:text-amber-400"
+          >
+            {droppedEdges} edges hidden
+          </span>
+        ) : null}
+      </div>
+      {nodesTruncated || canExpandDepth ? (
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          {canExpandDepth ? (
+            <button
+              type="button"
+              data-testid="graph-scope-expand"
+              onClick={onExpandDepth}
+              className="rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              Expand one hop
+            </button>
+          ) : null}
+          {nodesTruncated && mode !== 'overview' ? (
+            <button
+              type="button"
+              data-testid="graph-scope-overview"
+              onClick={onOverview}
+              className="rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              See all as groups
+            </button>
+          ) : null}
+          {nodesTruncated ? (
+            <span className="text-neutral-500">or narrow the filters</span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface ModeButtonProps {
+  mode: GraphMode;
+  current: GraphMode;
+  onSelect: (mode: GraphMode) => void;
+  icon: ReactNode;
+  title: string;
+  disabled?: boolean;
+  children: ReactNode;
+}
+
+// ModeButton is a radio, not a toggle. The three modes are exclusive
+// and one is always on, so a button that could turn itself off would
+// leave the canvas with nothing to draw.
+function ModeButton({
+  mode,
+  current,
+  onSelect,
+  icon,
+  title,
+  disabled,
+  children,
+}: ModeButtonProps) {
+  const active = mode === current;
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      disabled={disabled}
+      title={title}
+      data-testid={`graph-mode-${mode}`}
+      data-active={active ? 'true' : undefined}
+      onClick={() => onSelect(mode)}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 transition-colors',
+        active
+          ? 'border-cyan-500 bg-cyan-50 font-medium text-cyan-900 dark:bg-cyan-950 dark:text-cyan-100'
+          : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800',
+        'disabled:cursor-not-allowed disabled:opacity-40'
+      )}
+    >
+      {icon}
+      <span>{children}</span>
+    </button>
+  );
+}
+
 interface ToggleButtonProps {
   active: boolean;
   onClick: () => void;
@@ -1206,96 +1648,3 @@ function LegendRow({
   );
 }
 
-// deriveAggregatedItems (gm-ndb6) projects every WorkItem onto its
-// enclosing Epic and rewrites the relationship set so the resulting
-// node list contains one synthetic WorkItem per Epic. Cross-Epic
-// edges (blocks / parent_child / relates_to between items in
-// different Epics) become Epic→Epic edges of the same kind. Items
-// without an Epic ancestor are dropped — there's no node to render.
-//
-// Pure / O(V+E). Called once when the granularity toggle flips to
-// 'epics' and never again until items or the toggle change.
-function deriveAggregatedItems(items: WorkItem[]): WorkItem[] {
-  const byId = new Map<string, WorkItem>();
-  for (const it of items) byId.set(it.id, it);
-
-  // 1. parent[id] → immediate parent_child source for `id`. Built
-  //    from the child's relationships (parent_child: from=parent,
-  //    to=child).
-  const parent = new Map<string, string>();
-  for (const it of items) {
-    for (const r of it.relationships ?? []) {
-      if (r.kind !== 'parent_child') continue;
-      if (r.to === it.id) parent.set(it.id, r.from);
-    }
-  }
-
-  // 2. Walk each item to its closest Epic ancestor (or itself, if
-  //    the item is already an Epic). Memoize so chains aren't
-  //    re-traversed.
-  const epicOf = new Map<string, string | null>();
-  function findEpic(id: string): string | null {
-    if (epicOf.has(id)) return epicOf.get(id) ?? null;
-    const item = byId.get(id);
-    if (!item) {
-      epicOf.set(id, null);
-      return null;
-    }
-    if (item.kind === 'epic') {
-      epicOf.set(id, id);
-      return id;
-    }
-    const p = parent.get(id);
-    if (!p) {
-      epicOf.set(id, null);
-      return null;
-    }
-    const ancestor = findEpic(p);
-    epicOf.set(id, ancestor);
-    return ancestor;
-  }
-  for (const it of items) findEpic(it.id);
-
-  // 3. Build aggregated relationships per Epic. Skip parent_child
-  //    edges between Epics — those define the rollup, they aren't
-  //    drawn as graph dependencies. De-dup so a 100-item Epic with
-  //    50 internal blocks edges to another Epic emits one Epic→Epic
-  //    edge.
-  const aggRels = new Map<string, Set<string>>();
-  for (const it of items) {
-    for (const r of it.relationships ?? []) {
-      if (r.kind === 'parent_child') continue;
-      const fromEpic = findEpic(r.from);
-      const toEpic = findEpic(r.to);
-      if (!fromEpic || !toEpic || fromEpic === toEpic) continue;
-      const key = `${r.kind}:${fromEpic}->${toEpic}`;
-      const set = aggRels.get(fromEpic) ?? new Set<string>();
-      set.add(key);
-      aggRels.set(fromEpic, set);
-    }
-  }
-
-  // 4. Materialise a synthetic WorkItem per Epic with its aggregated
-  //    relationships attached. Preserve every original Epic field so
-  //    state pip / title still render.
-  return items
-    .filter((it) => it.kind === 'epic')
-    .map((epic) => {
-      const rels = Array.from(aggRels.get(epic.id) ?? []).map((key) => {
-        const [kindRaw, edge] = key.split(':');
-        const [from, to] = edge.split('->');
-        return {
-          kind: kindRaw as WorkItem['relationships'] extends
-            | (infer R)[]
-            | undefined
-            ? R extends { kind: infer K }
-              ? K
-              : never
-            : never,
-          from,
-          to,
-        };
-      });
-      return { ...epic, relationships: rels } as WorkItem;
-    });
-}

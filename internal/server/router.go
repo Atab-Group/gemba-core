@@ -439,6 +439,10 @@ func NewRouter(cfg config.ServeConfig, spa fs.FS, host *api.Host) *Router {
 		// `gemba doctor` and the initial-load bootstrap when the
 		// EventSource errors before the first frame lands.
 		api.Get("/adaptors", r.adaptorsHealth)
+		// A small fixed-size read-only surface for an external status
+		// widget. Counting the board client-side would mean fetching
+		// megabytes on every poll to render a handful of numbers.
+		api.Get("/work-summary", r.workSummary)
 		api.Get("/adaptors/stream", r.adaptorsStream)
 
 		// Capability manifests for both registered planes. The SPA reads
@@ -503,6 +507,11 @@ func NewRouter(cfg config.ServeConfig, spa fs.FS, host *api.Host) *Router {
 		// (/work-items, /work-items/ready) take precedence in chi's
 		// matcher.
 		api.Get("/work-items/{id}", r.getWorkItem)
+		// One backwards page of the item's real history, read on demand
+		// from the backend rather than from the board snapshot. Offered
+		// only when the bound plane implements core.ActivityReader; see
+		// work_activity.go.
+		api.Get("/work-items/{id}/activity", r.workItemActivity)
 		// Mutations gated by the X-GEMBA-Confirm nonce so SPA
 		// double-clicks / React re-mounts can't double-apply.
 		// gm-e12.10: POST creates a new work item with optional parent

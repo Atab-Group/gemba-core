@@ -56,6 +56,25 @@ export const DISPATCH_STATUSES: readonly DispatchStatus[] = [
   "not-now",
 ] as const;
 
+// ActivityKind is closed: a renderer picks an icon and a sentence from
+// it, so an open set would mean a generic fallback for everything
+// unfamiliar. A backend event with no variant here arrives as "other"
+// carrying its own summary.
+export type ActivityKind =
+  | "comment"
+  | "closed"
+  | "reopened"
+  | "labeled"
+  | "unlabeled"
+  | "assigned"
+  | "unassigned"
+  | "renamed"
+  | "referenced"
+  | "milestoned"
+  | "demilestoned"
+  | "duplicate"
+  | "other";
+
 export type EstimatedSize =
   | ""
   | "small"
@@ -417,6 +436,32 @@ export interface AgentGroup {
   members: GroupMembers;
   repository?: string[];
   extension?: Record<string, unknown>;
+}
+
+// ActivityEvent is one entry in a work item's history, returned by the
+// optional ActivityReader surface (core/activity.go).
+export interface ActivityEvent {
+  id: string;
+  kind: ActivityKind;
+  actor?: string;
+  at: string;
+  summary?: string;
+  body?: string;
+  url?: string;
+  detail?: Record<string, string>;
+}
+
+// ActivityPage is one backwards page of a work item's history. It never
+// claims to be the whole history: has_older and at_oldest are separate
+// and both explicit, so a bounded read is never rendered as complete.
+export interface ActivityPage {
+  events: ActivityEvent[];
+  older_cursor?: string;
+  has_older: boolean;
+  at_oldest: boolean;
+  total?: number;
+  source?: string;
+  freshness?: string;
 }
 
 // FLAG_NAMES is the exhaustive list of keys on Flags. Useful for

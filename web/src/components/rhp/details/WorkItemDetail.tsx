@@ -14,6 +14,8 @@
 // Test-ids: work-item-drawer-* → workitem-detail-* per design-doc
 // convention (docs/design/rhp.md).
 
+import { AtabActivityPanel } from './AtabActivityPanel';
+import { AtabGraphPanel } from './AtabGraphPanel';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowDown,
@@ -466,6 +468,11 @@ function BeadBody({ item, onNavigate }: { item: WorkItem; onNavigate: (id: strin
             />
           ) : null}
           {!grouped.any ? <Muted>No relationships.</Muted> : null}
+          {/* The list above works from relationship ids alone, so it can
+              name a neighbour but not say whether it still holds, what it
+              is called, or whether this board can read it. The graph
+              panel answers those, and marks the edges it cannot. */}
+          <AtabGraphPanel item={item} onNavigate={onNavigate} />
         </Section>
       ) : null}
 
@@ -520,6 +527,13 @@ function BeadBody({ item, onNavigate }: { item: WorkItem; onNavigate: (id: strin
               <Timestamp label="Updated" ts={timestamps.updated} />
               <Timestamp label="Closed" ts={timestamps.closed} />
             </dl>
+          </Section>
+          <Section title="History" testid="section-history">
+            {/* The card carries a bounded comment tail for lease and
+                evidence detection. This is the backend's own timeline,
+                read on demand, and it says plainly whether the reader is
+                looking at all of it. */}
+            <AtabActivityPanel id={item.id} onNavigate={onNavigate} />
           </Section>
           <Section title="Derived signals" testid="section-derived">
             {item.derived ? (

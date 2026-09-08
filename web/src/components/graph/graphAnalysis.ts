@@ -3,19 +3,22 @@
 // data so we can unit-test without mounting the renderer. Two
 // algorithms ship here:
 //
-//   * Tarjan strongly-connected-components → drives cycle highlighting.
-//     Any SCC of size ≥ 2 is a dependency cycle (a self-loop also
-//     qualifies, which is rare but worth flagging).
-//   * Longest-path-by-hop on the SCC-condensation DAG → drives the
-//     critical-path mode. Edge weights are 1 (we don't have effort
-//     estimates yet); the longest hop chain is the closest stand-in
-//     for "longest critical sequence" we can compute today.
+//   * Cycle detection over the SCC condensation. Any component of size
+//     >= 2 is a dependency cycle, and a self-loop qualifies too.
+//   * Longest-path-by-hop on that same condensation, which drives the
+//     critical-path mode. Edge weights are 1 because WorkItem carries
+//     no effort estimate; the longest hop chain is the closest stand-in
+//     for "longest critical sequence" available today.
 //
-// Both algorithms are O(V + E) — in our domain V is bounded by the
-// WorkItem count (a few thousand) and E by the relationship count
-// (handful per item), so we can afford to run both on every render
-// without memoisation overhead. The page memoises anyway to avoid
-// recomputing on unrelated state changes.
+// Both read the condensation from scc.ts rather than each running their
+// own Tarjan, which is how the layout came to have a third and much
+// worse implementation of the same idea. One shared condensation means
+// one place where cycle handling can be right or wrong.
+//
+// Both are O(V + E). The page memoises them so an unrelated state
+// change does not recompute a graph that has not moved.
+
+import { condense } from './scc';
 
 export interface DirectedEdge {
   from: string;
@@ -41,108 +44,27 @@ export interface CycleInfo {
 // builds its node universe from edges + nodes ∪) so a graph drawn
 // from a partial WorkItem fetch doesn't silently miss cycles.
 export function detectCycles(nodes: string[], edges: DirectedEdge[]): CycleInfo {
-  const adj = new Map<string, string[]>();
-  const seen = new Set<string>();
-  const ensure = (id: string) => {
-    if (!adj.has(id)) adj.set(id, []);
-    seen.add(id);
-  };
-  for (const n of nodes) ensure(n);
-  for (const e of edges) {
-    ensure(e.from);
-    ensure(e.to);
-    adj.get(e.from)!.push(e.to);
-  }
-
-  // Tarjan state. Iterative with an explicit stack so a deep DAG
-  // (1000-node line) doesn't blow the JS stack.
-  let index = 0;
-  const idx = new Map<string, number>();
-  const low = new Map<string, number>();
-  const onStack = new Set<string>();
-  const stack: string[] = [];
-  const sccs: string[][] = [];
-
-  type Frame = { node: string; iter: number };
-  const callStack: Frame[] = [];
-
-  const visit = (start: string) => {
-    callStack.push({ node: start, iter: 0 });
-    idx.set(start, index);
-    low.set(start, index);
-    index++;
-    stack.push(start);
-    onStack.add(start);
-
-    while (callStack.length > 0) {
-      const frame = callStack[callStack.length - 1];
-      const neighbours = adj.get(frame.node) ?? [];
-      if (frame.iter < neighbours.length) {
-        const w = neighbours[frame.iter];
-        frame.iter++;
-        if (!idx.has(w)) {
-          idx.set(w, index);
-          low.set(w, index);
-          index++;
-          stack.push(w);
-          onStack.add(w);
-          callStack.push({ node: w, iter: 0 });
-        } else if (onStack.has(w)) {
-          low.set(frame.node, Math.min(low.get(frame.node)!, idx.get(w)!));
-        }
-        continue;
-      }
-      // Children exhausted — possibly close an SCC.
-      if (low.get(frame.node) === idx.get(frame.node)) {
-        const scc: string[] = [];
-        let popped: string;
-        do {
-          popped = stack.pop()!;
-          onStack.delete(popped);
-          scc.push(popped);
-        } while (popped !== frame.node);
-        sccs.push(scc);
-      }
-      callStack.pop();
-      if (callStack.length > 0) {
-        const parent = callStack[callStack.length - 1];
-        low.set(parent.node, Math.min(low.get(parent.node)!, low.get(frame.node)!));
-      }
-    }
-  };
-
-  for (const n of seen) {
-    if (!idx.has(n)) visit(n);
-  }
+  const cond = condense(nodes, edges);
 
   const cycleNodes = new Set<string>();
-  const cycleEdges = new Set<string>();
   const cyclicSccs: string[][] = [];
-  // Self-loop check: an SCC of size 1 is cyclic only if the node has
-  // an edge back to itself.
-  const selfLoops = new Set<string>();
+  for (const comp of cond.cyclic) {
+    cyclicSccs.push(cond.components[comp]);
+    for (const n of cond.components[comp]) cycleNodes.add(n);
+  }
+
+  // Only intra-component edges of a cyclic component are cycle edges.
+  // An edge spanning two components is what breaks the cycle, not part
+  // of it, and painting it red would tell an operator to look at the
+  // wrong dependency.
+  const cycleEdges = new Set<string>();
   for (const e of edges) {
-    if (e.from === e.to) selfLoops.add(e.from);
+    const a = cond.compOf.get(e.from);
+    const b = cond.compOf.get(e.to);
+    if (a == null || a !== b || !cond.cyclic.has(a)) continue;
+    cycleEdges.add(edgeKey(e));
   }
-  for (const scc of sccs) {
-    const cyclic = scc.length > 1 || selfLoops.has(scc[0]);
-    if (!cyclic) continue;
-    cyclicSccs.push(scc);
-    for (const n of scc) cycleNodes.add(n);
-  }
-  // Mark intra-SCC edges. A node-to-component map keeps the edge
-  // classification O(E) instead of O(E·|SCC|).
-  const compOf = new Map<string, number>();
-  for (let i = 0; i < sccs.length; i++) {
-    for (const n of sccs[i]) compOf.set(n, i);
-  }
-  const cyclicSet = new Set<number>();
-  for (const scc of cyclicSccs) cyclicSet.add(compOf.get(scc[0])!);
-  for (const e of edges) {
-    if (compOf.get(e.from) === compOf.get(e.to) && cyclicSet.has(compOf.get(e.from)!)) {
-      cycleEdges.add(edgeKey(e));
-    }
-  }
+
   return { nodeIds: cycleNodes, edgeKeys: cycleEdges, sccs: cyclicSccs };
 }
 
@@ -165,156 +87,55 @@ export interface CriticalPath {
 // the manifest grows a `priority_weight` or similar later, swap the
 // edge weight without touching the algorithm structure.
 export function criticalPath(nodes: string[], edges: DirectedEdge[]): CriticalPath {
-  // Step 1: build SCC condensation. We rerun Tarjan because we want
-  // the per-node component id; detectCycles throws away that map.
-  const adj = new Map<string, string[]>();
-  const all = new Set<string>();
-  const ensure = (id: string) => {
-    if (!adj.has(id)) adj.set(id, []);
-    all.add(id);
-  };
-  for (const n of nodes) ensure(n);
-  for (const e of edges) {
-    ensure(e.from);
-    ensure(e.to);
-    adj.get(e.from)!.push(e.to);
+  const cond = condense(nodes, edges);
+  if (cond.components.length === 0) {
+    return { nodeIds: new Set(), edgeKeys: new Set(), length: 0 };
   }
 
-  // SCC discovery (iterative, same shape as detectCycles).
-  let index = 0;
-  const idx = new Map<string, number>();
-  const low = new Map<string, number>();
-  const onStack = new Set<string>();
-  const stack: string[] = [];
-  const compOf = new Map<string, number>();
-  const components: string[][] = [];
-
-  type Frame = { node: string; iter: number };
-  const callStack: Frame[] = [];
-
-  const visit = (start: string) => {
-    callStack.push({ node: start, iter: 0 });
-    idx.set(start, index);
-    low.set(start, index);
-    index++;
-    stack.push(start);
-    onStack.add(start);
-    while (callStack.length > 0) {
-      const frame = callStack[callStack.length - 1];
-      const neighbours = adj.get(frame.node) ?? [];
-      if (frame.iter < neighbours.length) {
-        const w = neighbours[frame.iter];
-        frame.iter++;
-        if (!idx.has(w)) {
-          idx.set(w, index);
-          low.set(w, index);
-          index++;
-          stack.push(w);
-          onStack.add(w);
-          callStack.push({ node: w, iter: 0 });
-        } else if (onStack.has(w)) {
-          low.set(frame.node, Math.min(low.get(frame.node)!, idx.get(w)!));
-        }
-        continue;
-      }
-      if (low.get(frame.node) === idx.get(frame.node)) {
-        const comp: string[] = [];
-        let popped: string;
-        do {
-          popped = stack.pop()!;
-          onStack.delete(popped);
-          comp.push(popped);
-          compOf.set(popped, components.length);
-        } while (popped !== frame.node);
-        components.push(comp);
-      }
-      callStack.pop();
-      if (callStack.length > 0) {
-        const parent = callStack[callStack.length - 1];
-        low.set(parent.node, Math.min(low.get(parent.node)!, low.get(frame.node)!));
-      }
-    }
-  };
-  for (const n of all) if (!idx.has(n)) visit(n);
-
-  // Step 2: build condensation edges (edges between distinct SCCs).
-  const condAdj = new Map<number, Set<number>>();
-  const condIn = new Map<number, Set<number>>();
-  for (let i = 0; i < components.length; i++) {
-    condAdj.set(i, new Set());
-    condIn.set(i, new Set());
-  }
-  for (const e of edges) {
-    const a = compOf.get(e.from);
-    const b = compOf.get(e.to);
-    if (a == null || b == null || a === b) continue;
-    condAdj.get(a)!.add(b);
-    condIn.get(b)!.add(a);
-  }
-
-  // Step 3: topological sort of the condensation DAG. Tarjan emits
-  // SCCs in reverse topological order, so reversing `components` gives
-  // a valid topo order. We rely on that rather than a separate Kahn
-  // pass — keeps the function tight without sacrificing correctness.
-  const topo = components.map((_, i) => i).reverse();
-
-  // Step 4: longest path DP on the condensation.
-  const dist = new Map<number, number>();
-  const pred = new Map<number, number | null>();
-  for (let i = 0; i < components.length; i++) {
-    dist.set(i, 0);
-    pred.set(i, null);
-  }
+  // Longest path on the condensation, one pass in topological order.
+  const dist = new Array<number>(cond.components.length).fill(0);
+  const pred = new Array<number>(cond.components.length).fill(-1);
   let bestEnd = -1;
   let bestDist = -1;
-  for (const u of topo) {
-    const du = dist.get(u)!;
-    if (du > bestDist) {
-      bestDist = du;
+  for (const u of cond.order) {
+    if (dist[u] > bestDist) {
+      bestDist = dist[u];
       bestEnd = u;
     }
-    for (const v of condAdj.get(u) ?? []) {
-      const candidate = du + 1;
-      if (candidate > (dist.get(v) ?? -1)) {
-        dist.set(v, candidate);
-        pred.set(v, u);
+    for (const v of cond.outEdges.get(u) ?? []) {
+      if (dist[u] + 1 > dist[v]) {
+        dist[v] = dist[u] + 1;
+        pred[v] = u;
       }
     }
   }
-
   if (bestEnd < 0) {
     return { nodeIds: new Set(), edgeKeys: new Set(), length: 0 };
   }
 
-  // Walk predecessor chain to recover the SCC sequence; expand each
-  // SCC into its node ids. The path length we report is hops between
-  // SCCs, so a single-cycle group counts as one stop along the chain.
   const path: number[] = [];
-  let cur: number | null = bestEnd;
-  while (cur != null) {
-    path.push(cur);
-    cur = pred.get(cur) ?? null;
-  }
+  for (let cur = bestEnd; cur >= 0; cur = pred[cur]) path.push(cur);
   path.reverse();
 
   const pathSet = new Set(path);
   const pathNodeIds = new Set<string>();
   for (const compIdx of path) {
-    for (const n of components[compIdx]) pathNodeIds.add(n);
+    for (const n of cond.components[compIdx]) pathNodeIds.add(n);
   }
-  // Edges along the path: any edge whose endpoints are in two
-  // adjacent SCCs on the chain, OR an intra-SCC edge inside a cyclic
-  // group on the path (so the highlight stays connected through cycles).
+
+  // Edges on the path: those spanning two adjacent components on the
+  // chain, plus the internal edges of any cycle the chain runs through,
+  // so the highlight stays connected rather than breaking at each cycle.
   const adjacentPairs = new Set<string>();
   for (let i = 0; i < path.length - 1; i++) {
     adjacentPairs.add(`${path[i]}->${path[i + 1]}`);
   }
   const pathEdgeKeys = new Set<string>();
   for (const e of edges) {
-    const a = compOf.get(e.from);
-    const b = compOf.get(e.to);
+    const a = cond.compOf.get(e.from);
+    const b = cond.compOf.get(e.to);
     if (a == null || b == null) continue;
-    if (a === b && pathSet.has(a) && components[a].length > 1) {
+    if (a === b && pathSet.has(a) && cond.cyclic.has(a)) {
       pathEdgeKeys.add(edgeKey(e));
     } else if (adjacentPairs.has(`${a}->${b}`)) {
       pathEdgeKeys.add(edgeKey(e));

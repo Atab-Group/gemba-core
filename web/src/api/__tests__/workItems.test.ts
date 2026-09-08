@@ -51,6 +51,65 @@ describe('listWorkItems / getWorkItem', () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/work-items');
   });
 
+  // The board buckets every item into a column, so it needs all of them.
+  // The server caps a page, and stopping at the first page silently drops
+  // whatever sorts last: on a multi-repository source that is entire
+  // repositories rather than a thin tail.
+  it('listWorkItems walks every page while the server says has_more', async () => {
+    const page = (ids: string[], has_more: boolean) =>
+      new Response(
+        JSON.stringify({
+          items: ids.map((id) => ({ ...sampleItem, id })),
+          total: ids.length,
+          has_more,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+
+    fetchSpy
+      .mockResolvedValueOnce(page(['a', 'b'], true))
+      .mockResolvedValueOnce(page(['c', 'd'], true))
+      .mockResolvedValueOnce(page(['e'], false));
+
+    const items = await listWorkItems();
+
+    expect(items.map((i) => i.id)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    // The first page carries no offset, so an unpaginated read still
+    // looks exactly like one on the wire. Later pages resume from the
+    // number of items already taken.
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/work-items');
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/work-items?offset=2');
+    expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/work-items?offset=4');
+  });
+
+  // A server that predates has_more omits it. One page is what it would
+  // have returned anyway, so the walk stops rather than asking forever.
+  it('listWorkItems stops when the server omits has_more', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ items: [sampleItem], total: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    const items = await listWorkItems();
+    expect(items).toEqual([sampleItem]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // An explicit limit is a caller asking for a bounded read, and it is
+  // answered literally rather than walked.
+  it('listWorkItems does not walk when the caller sets a limit', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ items: [sampleItem], total: 1, has_more: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    const items = await listWorkItems({ limit: 1 });
+    expect(items).toEqual([sampleItem]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('listWorkItems tolerates an empty envelope (items missing)', async () => {
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ total: 0 }), {

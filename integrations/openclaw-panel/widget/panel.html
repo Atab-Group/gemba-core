@@ -1,0 +1,84 @@
+<!--
+  The Gemba companion panel, as an OpenClaw board widget.
+
+  This is the body passed to show_widget as `widget_code`, with the
+  `gemba-panel.summary` data binding declared in `capabilities`. It has
+  no network reach of its own and asks for none: everything it renders
+  comes back through window.openclaw.data.read, resolved gateway-side.
+
+  Authoring call:
+
+    show_widget({
+      title: "Gemba",
+      name: "gemba",
+      pin: true,
+      size: "md",
+      capabilities: { data: ["gemba-panel.summary"] },
+      widget_code: <this file>
+    })
+-->
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 13px/1.4 system-ui, sans-serif; }
+  .wrap { padding: 10px 12px; }
+  .total { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sub { opacity: 0.65; font-size: 11px; }
+  .row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+  .row + .row { border-top: 1px solid rgba(128,128,128,0.18); }
+  .n { font-variant-numeric: tabular-nums; opacity: 0.8; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+       opacity: 0.55; margin: 12px 0 4px; font-weight: 600; }
+  .warn { margin-top: 8px; padding: 6px 8px; border-radius: 4px;
+          background: rgba(217,119,6,0.14); color: #92400e; font-size: 12px; }
+  @media (prefers-color-scheme: dark) { .warn { color: #fcd34d; } }
+</style>
+
+<div class="wrap" id="root"><div class="sub">Reading the board…</div></div>
+
+<script type="module">
+  const root = document.getElementById('root');
+
+  const esc = (s) =>
+    String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+  const rows = (items) =>
+    items.map((r) => `<div class="row"><span>${esc(r[0])}</span><span class="n">${esc(r[1])}</span></div>`).join('');
+
+  function render(s) {
+    // The health line comes first and is never omitted. A panel that
+    // shows numbers from a degraded board without saying so is showing a
+    // subset as if it were the whole.
+    const warnings = [];
+    if (!s.healthy) warnings.push(`Degraded: ${s.degraded.join('; ')}`);
+    if (s.stale_sources.length) warnings.push(`Stale: ${s.stale_sources.join(', ')}`);
+
+    const ready = s.by_readiness.ready ?? 0;
+    const blocked = s.by_readiness.blocked ?? 0;
+
+    root.innerHTML = `
+      <div class="total">${esc(s.total)}</div>
+      <div class="sub">work items · ${esc(ready)} ready · ${esc(blocked)} blocked</div>
+      ${warnings.length ? `<div class="warn">${warnings.map(esc).join('<br>')}</div>` : ''}
+      <h2>Projects</h2>
+      ${rows(s.projects.map((p) => [p.title, p.items]))}
+      ${s.projects_truncated ? `<div class="sub">and ${esc(s.projects_truncated)} more</div>` : ''}
+      ${s.claimed.length ? `<h2>Being worked</h2>${rows(s.claimed.map((c) => [`${c.title} · ${c.holder}`, c.state]))}` : ''}
+      ${s.claimed_truncated ? `<div class="sub">and ${esc(s.claimed_truncated)} more</div>` : ''}
+      <div class="sub" style="margin-top:10px">read ${esc(s.generated_at || 'never')}</div>
+    `;
+  }
+
+  async function refresh() {
+    try {
+      render(await window.openclaw.data.read('gemba-panel.summary'));
+    } catch (err) {
+      // A failed read is said out loud. Leaving the last good numbers on
+      // screen would present an old board as the current one, which is
+      // the failure this whole dashboard exists to avoid.
+      root.innerHTML = `<div class="warn">The Gemba summary could not be read. ${esc(err?.message ?? '')}</div>`;
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 60000);
+</script>

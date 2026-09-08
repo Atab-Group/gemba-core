@@ -63,6 +63,10 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { MilestonePicker } from '@/components/board/MilestonePicker';
 import { MILESTONE_ALL, filterByMilestone, type MilestoneID } from '@/components/board/milestone';
+import { PROJECT_ALL, filterByProject, type ProjectID } from '@/components/board/project';
+import { ProjectFilterBar } from '@/components/board/ProjectFilterBar';
+import { SOURCE_ALL, filterBySource, type SourceID } from '@/components/board/source';
+import { SourceFilterBar } from '@/components/board/SourceFilterBar';
 import {
   cellId,
   resolveRestage,
@@ -331,7 +335,37 @@ export function BoardPage() {
   // a single epic's lineage, milestone narrows to a milestone's child
   // epics + their descendants. Both can be active at once and are
   // composed (milestone filter first, then scope).
+  // The source axis rides in the URL beside milestone and scope, so it
+  // survives a reload and travels in a shared link, and so selecting a
+  // project leaves every other filter exactly where it was.
+  const source: SourceID = params.get('source') ?? SOURCE_ALL;
+  // The project axis is independent of the source axis: a source is an
+  // org and a project is one board inside it, so both can be active at
+  // once and each is dropped from the URL when it is not.
+  const project: ProjectID = params.get('project') ?? PROJECT_ALL;
   const milestone: MilestoneID = params.get('milestone') ?? MILESTONE_ALL;
+  const setSource = useCallback(
+    (next: SourceID) => {
+      const p = new URLSearchParams(params);
+      if (next === SOURCE_ALL) p.delete('source');
+      else p.set('source', next);
+      // Only the source key is touched, so search, status and every
+      // other filter in the query string survive the change.
+      setParams(p, { replace: true });
+    },
+    [params, setParams]
+  );
+  const setProject = useCallback(
+    (next: ProjectID) => {
+      const p = new URLSearchParams(params);
+      if (next === PROJECT_ALL) p.delete('project');
+      else p.set('project', next);
+      // Only the project key is touched, so search, status, source and
+      // every other filter in the query string survive the change.
+      setParams(p, { replace: true });
+    },
+    [params, setParams]
+  );
   const setMilestone = useCallback(
     (next: MilestoneID) => {
       const p = new URLSearchParams(params);
@@ -453,15 +487,28 @@ export function BoardPage() {
   // dropdowns can enumerate every option regardless of the active
   // selection. Order: milestone narrows first (drops other milestones'
   // subtrees), then scope narrows within that.
-  const scopedData = data
-    ? sortWorkItems(filterByScope(filterByMilestone(data, milestone), scope), orderKey)
+  // Source narrows first: it answers "which project", and milestone and
+  // scope then narrow inside whatever that left. Running it last would
+  // make the other two pickers enumerate options from projects the
+  // operator had already filtered away.
+  // Project narrows before source: it is the narrower question, and the
+  // two compose in either order because neither depends on the other.
+  const sourcedData = data
+    ? filterBySource(filterByProject(data, project), source)
     : data;
+  const scopedData = sourcedData
+    ? sortWorkItems(filterByScope(filterByMilestone(sourcedData, milestone), scope), orderKey)
+    : sourcedData;
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      {/* Fed the unfiltered set, so every count says what that button
+          would show rather than what the current filter has left. */}
+      <ProjectFilterBar items={data ?? []} value={project} onChange={setProject} />
+      <SourceFilterBar items={data ?? []} value={source} onChange={setSource} />
       <BoardHeader
         layout={layout}
-        items={data ?? []}
+        items={sourcedData ?? []}
         scope={scope}
         onChangeScope={setScope}
         milestone={milestone}

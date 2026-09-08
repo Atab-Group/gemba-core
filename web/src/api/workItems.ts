@@ -6,16 +6,32 @@
 // (including tests that mount the hooks with a fresh QueryClient per run).
 
 import { apiFetch } from './client';
-import type { AgentRef, DefinitionOfDone, WorkItem } from '@/types/core.gen';
+import type { ActivityPage, AgentRef, DefinitionOfDone, WorkItem } from '@/types/core.gen';
 
 // ListWorkItemsEnvelope is the wire shape the gm-peg list handler emits.
 // The server normalises nil slices so `items` is always a JSON array,
-// never null. `total` is the pre-pagination count of items (M1.3 has
-// no pagination so it equals items.length, but callers MUST NOT assume
-// that once filtering / pagination lands).
+// never null.
+//
+// `total` is the length of THIS page, not the size of the filtered set.
+// The handler asks the adaptor for one item more than the page needs and
+// no more, which is what makes `has_more` exact, and it is also why the
+// handler cannot know a pre-pagination count without an unbounded read
+// on every request. Use `has_more` to decide whether to keep walking and
+// `/api/work-summary` for a count of the whole board; a caller that
+// treats `total` as the size of the set will read a page size instead.
 export interface ListWorkItemsEnvelope {
   items: WorkItem[];
+  // total is the length of this page. See the note above: it is not the
+  // size of the filtered set.
   total: number;
+  // offset is the index this page started at, echoed back so a caller
+  // walking the list does not have to track it itself.
+  offset?: number;
+  // has_more says whether a page follows this one. The handler asks the
+  // adaptor for one item more than the page needs to decide it, so it is
+  // exact: a page that comes back exactly full is otherwise
+  // indistinguishable from the last one.
+  has_more?: boolean;
 }
 
 // WorkItemListFilter mirrors core.WorkItemFilter on the Go side.
@@ -29,6 +45,10 @@ export interface WorkItemListFilter {
   assignee_id?: string;
   sprint_id?: string;
   limit?: number;
+  // offset is the index into the adaptor's ordering that a page starts
+  // at. Set it only when walking pages by hand; listWorkItems() walks
+  // them for you.
+  offset?: number;
   // gm-e12.22.1: workflow-template + wisp opt-ins. Default behavior
   // hides templates and wisps from work surfaces (Plan / Backlog /
   // Sessions / Sprints). The Workflow Library opts in via
@@ -56,6 +76,9 @@ function buildListQuery(filter?: WorkItemListFilter): string {
   if (filter.assignee_id) p.set('assignee_id', filter.assignee_id);
   if (filter.sprint_id) p.set('sprint_id', filter.sprint_id);
   if (filter.limit != null) p.set('limit', String(filter.limit));
+  // A zero offset is the default, so it is left off the wire: the first
+  // page of a walk should look exactly like an unpaginated request.
+  if (filter.offset) p.set('offset', String(filter.offset));
   if (filter.include_templates) p.set('include_templates', 'true');
   if (filter.include_wisps) p.set('include_wisps', 'true');
   if (filter.created_since) p.set('created_since', filter.created_since);
@@ -68,13 +91,47 @@ function buildListQuery(filter?: WorkItemListFilter): string {
 // can treat listWorkItems like a query. Accepts an optional filter
 // (gm-e12.9.1); omit for the unfiltered list. Use
 // listWorkItemsEnvelope() below when the caller also needs `total`.
+// maxListPages bounds the walk. At the server's default page size this
+// is far more work than any board can usefully render, and it is here so
+// a server that answered has_more forever could not spin the tab
+// indefinitely. Hitting it means something is wrong with paging, not
+// that the workspace is large.
+const maxListPages = 50;
+
+// listWorkItems — GET /api/work-items, walking every page.
+//
+// The server caps a page at a default limit, and the board buckets items
+// into columns, so it needs all of them: stopping at the first page
+// silently drops whatever sorts last, which on a multi-repository source
+// is entire repositories rather than a thin tail. A caller that wants
+// one bounded page passes an explicit limit and gets exactly that.
 export async function listWorkItems(filter?: WorkItemListFilter): Promise<WorkItem[]> {
-  const env = await apiFetch<ListWorkItemsEnvelope>(`/work-items${buildListQuery(filter)}`);
-  return env.items ?? [];
+  // An explicit limit means the caller asked for a bounded read, so it
+  // is answered literally rather than walked.
+  if (filter?.limit != null || filter?.offset) {
+    const env = await apiFetch<ListWorkItemsEnvelope>(`/work-items${buildListQuery(filter)}`);
+    return env.items ?? [];
+  }
+
+  const all: WorkItem[] = [];
+  let offset = 0;
+  for (let page = 0; page < maxListPages; page++) {
+    const env = await apiFetch<ListWorkItemsEnvelope>(
+      `/work-items${buildListQuery({ ...filter, offset })}`
+    );
+    const items = env.items ?? [];
+    all.push(...items);
+    // A server predating has_more omits it, and one page is what it
+    // would have returned anyway.
+    if (!env.has_more || items.length === 0) break;
+    offset += items.length;
+  }
+  return all;
 }
 
 // listWorkItemsEnvelope — same fetch, but surfaces the full envelope for
-// callers that need `total` (pagination counts, empty-state copy).
+// callers that need the raw envelope. Note that `total` is this page's
+// length rather than the size of the set.
 export async function listWorkItemsEnvelope(
   filter?: WorkItemListFilter
 ): Promise<ListWorkItemsEnvelope> {
@@ -92,6 +149,36 @@ export async function getWorkItem(id: string): Promise<WorkItem> {
     throw new Error('getWorkItem: id is required');
   }
   return apiFetch<WorkItem>(`/work-items/${encodeURIComponent(id)}`);
+}
+
+// getWorkItemActivity — GET /api/work-items/{id}/activity, one backwards
+// page of the item's real history.
+//
+// This is not the same data as the bounded comment tail the projection
+// carries on the card. That tail exists for lease and evidence
+// detection; this is the backend's own timeline, read on demand. The
+// page reports has_older and at_oldest separately, and a renderer must
+// use at_oldest, not an empty next cursor, before telling anyone they
+// have seen the whole history.
+//
+// Throws ApiError with status 501 / code "unsupported" when the bound
+// adaptor keeps no history. That is a different answer from an item
+// nobody has touched, and callers must render it differently.
+export async function getWorkItemActivity(
+  id: string,
+  opts?: { before?: string; limit?: number }
+): Promise<ActivityPage> {
+  if (!id) {
+    throw new Error('getWorkItemActivity: id is required');
+  }
+  const params = new URLSearchParams();
+  if (opts?.before) params.set('before', opts.before);
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  const page = await apiFetch<ActivityPage>(
+    `/work-items/${encodeURIComponent(id)}/activity${qs ? `?${qs}` : ''}`
+  );
+  return { ...page, events: page.events ?? [] };
 }
 
 // WorkItemPatch mirrors the Go shape (internal/core/workplane.go).

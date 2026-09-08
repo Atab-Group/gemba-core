@@ -1,0 +1,611 @@
+{
+  "source": "atab-group",
+  "issues": [
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 301
+      },
+      "title": "Show a price range on the Services card",
+      "body": "## What\n\nServices carrying a minimum and a maximum price should show the range rather than the minimum alone.\n\n## Acceptance Criteria\n\n- [ ] A service with a min and a max renders \"R120 to R400\" on the card\n- [ ] A service with a single price renders that price unchanged\n- [x] The catalogue list and the detail page agree\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: feature\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/301",
+      "state": "OPEN",
+      "labels": [
+        "type:feature",
+        "priority:p1",
+        "agent:available"
+      ],
+      "author": "mike21pentz",
+      "created_at": "2026-08-30T08:00:00Z",
+      "updated_at": "2026-09-07T09:15:00Z",
+      "project_item": {
+        "item_id": "PVTI_ready",
+        "project_number": 1,
+        "project_title": "Atab Group Tasks",
+        "fields": {
+          "Area": "Product",
+          "Estimate": "S",
+          "Priority": "P1",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 302
+      },
+      "title": "Wire the range formatter into the recommend surface",
+      "body": "## What\n\nReuse the formatter #301 introduces.\n\n## Acceptance Criteria\n\n- [ ] The recommend surface renders ranges through the same formatter\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: feature\nautonomy: pr\nblocked_by:\n  - 301\ndiscovered_from: 301\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/302",
+      "state": "OPEN",
+      "labels": [
+        "type:feature",
+        "priority:p2"
+      ],
+      "author": "mike21pentz",
+      "created_at": "2026-08-30T08:05:00Z",
+      "updated_at": "2026-09-07T09:10:00Z",
+      "project_item": {
+        "item_id": "PVTI_blocked",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P2",
+          "Status": "Backlog"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 303
+      },
+      "title": "Migrate the basket totals to the shared money type",
+      "body": "## What\n\nOne money type across the app.\n\n## Acceptance Criteria\n\n- [ ] Basket totals use the shared type\n- [ ] Rounding matches the catalogue\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: task\nautonomy: auto\nblocked_by:\n  - \"Atab-Group/ATAB-Marketplace#77\"\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/303",
+      "state": "OPEN",
+      "labels": [
+        "type:task",
+        "priority:p2"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-08-31T10:00:00Z",
+      "updated_at": "2026-09-07T08:00:00Z",
+      "parent": {
+        "ref": {
+          "owner": "Atab-Group",
+          "repo": "Product-Seela",
+          "number": 310
+        },
+        "title": "Epic: unified money handling",
+        "state": "OPEN"
+      },
+      "project_item": {
+        "item_id": "PVTI_crossrepo",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P2",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 304
+      },
+      "title": "Rebuild the checkout summary panel",
+      "body": "## What\n\nOne-page checkout summary.\n\n## Acceptance Criteria\n\n- [x] The panel lists every line item\n- [ ] The totals row matches the basket\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: feature\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/304",
+      "state": "OPEN",
+      "labels": [
+        "type:feature",
+        "priority:p0",
+        "agent:claimed"
+      ],
+      "assignees": [
+        "niclom12"
+      ],
+      "author": "mike21pentz",
+      "created_at": "2026-09-01T07:00:00Z",
+      "updated_at": "2026-09-07T11:40:00Z",
+      "comments": [
+        {
+          "body": "Claimed by claude-1 (operating as @niclom12).",
+          "author": "niclom12",
+          "created_at": "2026-09-07T11:30:00Z",
+          "updated_at": "2026-09-07T11:30:00Z"
+        },
+        {
+          "body": "\u003c!-- atab-lease holder=claude-1 instance=w-7742 expires=2030-01-01T00:00:00Z --\u003e",
+          "author": "niclom12",
+          "created_at": "2026-09-07T11:31:00Z",
+          "updated_at": "2026-09-07T11:31:00Z"
+        }
+      ],
+      "project_item": {
+        "item_id": "PVTI_inflight",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Estimate": "M",
+          "Priority": "P0",
+          "Status": "In Progress"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 305
+      },
+      "title": "Backfill the supplier import audit trail",
+      "body": "## What\n\nEvery import writes an audit row.\n\n## Acceptance Criteria\n\n- [ ] An import writes one audit row per file\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: chore\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/305",
+      "state": "OPEN",
+      "labels": [
+        "type:chore",
+        "priority:p3"
+      ],
+      "assignees": [
+        "niclom12"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-09-02T07:00:00Z",
+      "updated_at": "2026-09-06T18:00:00Z",
+      "comments": [
+        {
+          "body": "\u003c!-- atab-lease holder=claude-3 instance=w-6001 expires=2026-09-06T19:00:00Z --\u003e",
+          "author": "niclom12",
+          "created_at": "2026-09-06T18:00:00Z",
+          "updated_at": "2026-09-06T18:00:00Z"
+        }
+      ],
+      "project_item": {
+        "item_id": "PVTI_expiredlease",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P3",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 306
+      },
+      "title": "Add a currency formatter helper",
+      "body": "## What\n\nOne helper, used everywhere.\n\n## Acceptance Criteria\n\n- [x] The helper formats cents to a display string\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: task\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/306",
+      "state": "OPEN",
+      "labels": [
+        "type:task",
+        "priority:p2"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-09-04T07:00:00Z",
+      "updated_at": "2026-09-07T10:05:00Z",
+      "project_item": {
+        "item_id": "PVTI_propen",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P2",
+          "Status": "Todo"
+        }
+      },
+      "linked_prs": [
+        {
+          "ref": {
+            "owner": "Atab-Group",
+            "repo": "Product-Seela",
+            "number": 307
+          },
+          "title": "feat(money): add a currency formatter helper",
+          "url": "https://github.com/Atab-Group/Product-Seela/pull/307",
+          "state": "OPEN",
+          "merged": false,
+          "draft": false,
+          "head_sha": "9f1c2d4a6b8e0f2a4c6e8a0b2d4f6a8c0e2a4c6e",
+          "check_rollup": "SUCCESS",
+          "checks": [
+            {
+              "name": "build",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "url": "https://github.com/Atab-Group/Product-Seela/actions/runs/1"
+            },
+            {
+              "name": "lint",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "url": "https://github.com/Atab-Group/Product-Seela/actions/runs/2"
+            }
+          ],
+          "comments": [
+            {
+              "body": "\u003c!-- atab-local-ci --\u003e\n```json\n{\"head_sha\":\"9f1c2d4a6b8e0f2a4c6e8a0b2d4f6a8c0e2a4c6e\",\"all_green\":true,\"source\":\"ci.json\",\"run_by\":\"work\",\"commands\":[{\"name\":\"test\",\"cmd\":\"npm test\",\"exit\":0,\"duration_s\":41},{\"name\":\"lint\",\"cmd\":\"npm run lint\",\"exit\":0,\"duration_s\":6}]}\n```",
+              "author": "niclom12",
+              "created_at": "2026-09-07T09:50:00Z",
+              "updated_at": "2026-09-07T09:50:00Z"
+            },
+            {
+              "body": "\u003c!-- atab-verify --\u003e\n```json\n{\"verifier\":\"verifier\",\"task_id\":\"Product-Seela#306\",\"verified_at\":\"2026-09-07T10:00:00Z\",\"overall_verdict\":\"PASS\",\"bounce_back_message\":\"\",\"criteria\":[{\"id\":\"AC-1\",\"criterion\":\"The helper formats cents to a display string\",\"verdict\":\"PASS\",\"evidence\":[]}]}\n```",
+              "author": "niclom12",
+              "created_at": "2026-09-07T10:00:00Z",
+              "updated_at": "2026-09-07T10:00:00Z"
+            }
+          ],
+          "updated_at": "2026-09-07T10:05:00Z"
+        }
+      ]
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 308
+      },
+      "title": "Investigate the intermittent search timeout",
+      "body": "## What\n\nSearch times out about once a day.\n\n## Acceptance Criteria\n\n- [ ] The cause is named with a trace\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: research\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/308",
+      "state": "OPEN",
+      "labels": [
+        "type:research",
+        "priority:p2"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-09-05T07:00:00Z",
+      "updated_at": "2026-09-07T07:30:00Z",
+      "project_item": {
+        "item_id": "PVTI_unknownstatus",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P2",
+          "Status": "Parking Lot"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 309
+      },
+      "title": "Decide the refund policy copy",
+      "body": "## What\n\nLegal wording.\n\n## Acceptance Criteria\n\n- [ ] The copy is signed off\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: task\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/309",
+      "state": "OPEN",
+      "labels": [
+        "type:task",
+        "priority:p2",
+        "needs-human"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-09-05T08:00:00Z",
+      "updated_at": "2026-09-07T07:00:00Z",
+      "project_item": {
+        "item_id": "PVTI_parked",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P2",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 310
+      },
+      "title": "Epic: unified money handling",
+      "body": "Tracker only.\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: epic\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/310",
+      "state": "OPEN",
+      "labels": [
+        "type:epic"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-08-20T07:00:00Z",
+      "updated_at": "2026-09-07T07:00:00Z",
+      "sub_issues": [
+        {
+          "ref": {
+            "owner": "Atab-Group",
+            "repo": "Product-Seela",
+            "number": 303
+          },
+          "title": "Migrate the basket totals to the shared money type",
+          "state": "OPEN"
+        },
+        {
+          "ref": {
+            "owner": "Atab-Group",
+            "repo": "Product-Seela",
+            "number": 311
+          },
+          "title": "Round consistently in the catalogue",
+          "state": "CLOSED"
+        }
+      ],
+      "project_item": {
+        "item_id": "PVTI_epic",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P2",
+          "Status": "Backlog"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 312
+      },
+      "title": "Epic: WhatsApp integration",
+      "body": "Tracker only.\n\n## Acceptance Criteria\n\n- [x] Inbound messages land\n- [x] Outbound messages send\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: epic\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/312",
+      "state": "OPEN",
+      "labels": [
+        "type:epic"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-08-10T07:00:00Z",
+      "updated_at": "2026-09-05T07:00:00Z",
+      "sub_issues": [
+        {
+          "ref": {
+            "owner": "Atab-Group",
+            "repo": "Product-Seela",
+            "number": 313
+          },
+          "title": "Inbound webhook",
+          "state": "CLOSED"
+        },
+        {
+          "ref": {
+            "owner": "Atab-Group",
+            "repo": "Product-Seela",
+            "number": 314
+          },
+          "title": "Outbound sender",
+          "state": "CLOSED"
+        }
+      ],
+      "project_item": {
+        "item_id": "PVTI_drained",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P2",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 315
+      },
+      "title": "Drop the legacy webhook shim",
+      "body": "## What\n\nDelete the shim.\n\n## Acceptance Criteria\n\n- [ ] The shim is gone and nothing imports it\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: chore\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/315",
+      "state": "OPEN",
+      "labels": [
+        "type:chore",
+        "priority:p3"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-08-15T07:00:00Z",
+      "updated_at": "2026-09-04T07:00:00Z",
+      "parent": {
+        "ref": {
+          "owner": "Atab-Group",
+          "repo": "Product-Seela",
+          "number": 316
+        },
+        "title": "Epic: retire the legacy gateway",
+        "state": "CLOSED"
+      },
+      "project_item": {
+        "item_id": "PVTI_orphan",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P3",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 317
+      },
+      "title": "Typo on the pricing page",
+      "body": "Small typo in the heading.",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/317",
+      "state": "OPEN",
+      "labels": [
+        "type:bug",
+        "priority:p3"
+      ],
+      "author": "mike21pentz",
+      "created_at": "2026-09-06T07:00:00Z",
+      "updated_at": "2026-09-06T07:30:00Z"
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 318
+      },
+      "title": "Tighten the import validation",
+      "body": "## What\n\nValidate harder.\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: [unclosed\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/318",
+      "state": "OPEN",
+      "labels": [
+        "type:task",
+        "priority:p3"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-09-06T08:00:00Z",
+      "updated_at": "2026-09-06T08:30:00Z",
+      "project_item": {
+        "item_id": "PVTI_malformed",
+        "project_number": 1,
+        "fields": {
+          "Area": "Product",
+          "Priority": "P3",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 320
+      },
+      "title": "Split the settlement job",
+      "body": "## Acceptance Criteria\n\n- [ ] The job splits cleanly\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: task\nautonomy: pr\nblocked_by:\n  - 321\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/320",
+      "state": "OPEN",
+      "labels": [
+        "type:task",
+        "priority:p2"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-09-06T09:00:00Z",
+      "updated_at": "2026-09-06T09:30:00Z",
+      "project_item": {
+        "item_id": "PVTI_cycle_a",
+        "project_number": 1,
+        "fields": {
+          "Area": "Internal",
+          "Priority": "P2",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "Product-Seela",
+        "number": 321
+      },
+      "title": "Rewrite the settlement reconciler",
+      "body": "## Acceptance Criteria\n\n- [ ] Reconciliation matches the ledger\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: task\nautonomy: pr\nblocked_by:\n  - 320\n```\n",
+      "url": "https://github.com/Atab-Group/Product-Seela/issues/321",
+      "state": "OPEN",
+      "labels": [
+        "type:task",
+        "priority:p2"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-09-06T09:05:00Z",
+      "updated_at": "2026-09-06T09:35:00Z",
+      "project_item": {
+        "item_id": "PVTI_cycle_b",
+        "project_number": 1,
+        "fields": {
+          "Area": "Internal",
+          "Priority": "P2",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "ATAB-Marketplace",
+        "number": 401
+      },
+      "title": "Rotate the payment webhook secret",
+      "body": "## What\n\nRotate and re-verify.\n\n## Acceptance Criteria\n\n- [ ] The webhook verifies against the new secret\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: task\nautonomy: human\nrequires_env:\n  - STRIPE_WEBHOOK_SECRET\n  - name: STRIPE_API_KEY\n    from: \"secret:stripe/api-key\"\n    scope: both\n```\n",
+      "url": "https://github.com/Atab-Group/ATAB-Marketplace/issues/401",
+      "state": "OPEN",
+      "labels": [
+        "type:task",
+        "priority:p1"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-09-03T07:00:00Z",
+      "updated_at": "2026-09-07T06:00:00Z",
+      "project_item": {
+        "item_id": "PVTI_human",
+        "project_number": 1,
+        "fields": {
+          "Area": "Internal",
+          "Priority": "P1",
+          "Status": "Todo"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "ATAB-Marketplace",
+        "number": 402
+      },
+      "title": "Ship the supplier onboarding email",
+      "body": "## Acceptance Criteria\n\n- [x] The email sends on approval\n\n\u003c!-- atab-meta: managed by atab-core skills, do not edit by hand --\u003e\n```yaml\ntype: feature\nautonomy: pr\n```\n",
+      "url": "https://github.com/Atab-Group/ATAB-Marketplace/issues/402",
+      "state": "CLOSED",
+      "state_reason": "COMPLETED",
+      "labels": [
+        "type:feature",
+        "priority:p1"
+      ],
+      "author": "niclom12",
+      "created_at": "2026-08-01T07:00:00Z",
+      "updated_at": "2026-09-02T07:00:00Z",
+      "project_item": {
+        "item_id": "PVTI_done",
+        "project_number": 1,
+        "fields": {
+          "Area": "Internal",
+          "Priority": "P1",
+          "Status": "Done"
+        }
+      }
+    },
+    {
+      "ref": {
+        "owner": "Atab-Group",
+        "repo": "ATAB-Marketplace",
+        "number": 403
+      },
+      "title": "Consider native price ranges on Services",
+      "body": "Superseded.",
+      "url": "https://github.com/Atab-Group/ATAB-Marketplace/issues/403",
+      "state": "CLOSED",
+      "state_reason": "NOT_PLANNED",
+      "labels": [
+        "type:feature",
+        "priority:p3",
+        "stale"
+      ],
+      "author": "mike21pentz",
+      "created_at": "2026-05-24T16:50:23Z",
+      "updated_at": "2026-09-07T05:24:59Z"
+    }
+  ]
+}
