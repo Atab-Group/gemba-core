@@ -58,6 +58,13 @@ type Item = {
   Icon: LucideIcon;
   workspaceScoped?: boolean;
   activePaths?: string[];
+  // readOnlyCapable marks a pane that works against a read-only work
+  // plane with no project behind it. Such a plane never gets a project,
+  // so the cold-start rule would disable these panes permanently and
+  // explain it with a message about creating a project that would never
+  // become true. Panes without this marker are still disabled, but they
+  // say why.
+  readOnlyCapable?: boolean;
 };
 
 // Core panes — the operator's daily verbs. Refine sits between Board
@@ -70,6 +77,7 @@ const items: Item[] = [
     label: 'Board',
     Icon: LayoutGrid,
     workspaceScoped: true,
+    readOnlyCapable: true,
     activePaths: ['/board', '/grid', '/sprints'],
   },
   {
@@ -77,6 +85,7 @@ const items: Item[] = [
     label: 'Graph',
     Icon: Network,
     workspaceScoped: true,
+    readOnlyCapable: true,
   },
   { to: '/refine', label: 'Refine', Icon: Filter, workspaceScoped: true, activePaths: ['/refine', '/backlog'] },
   { to: '/walk', label: 'Review', Icon: Footprints, workspaceScoped: true, activePaths: ['/walk', '/walks'] },
@@ -109,6 +118,12 @@ const secondaryItems: Item[] = [
 ];
 
 const COLD_START_TITLE = 'Available after creating or switching to a project.';
+// A read-only work plane is a projection of somebody else's tracker.
+// These panes drive work rather than display it, so they have nothing to
+// act on here and never will, which is a different statement from the
+// cold-start one and deserves its own words.
+const READ_ONLY_TITLE =
+  'Unavailable on a read-only work plane: this pane changes work, and this board only reads it.';
 
 // EscalationBadge renders a numeric pill to the right of the label.
 // Visible only when the query has resolved without error and the count
@@ -131,7 +146,7 @@ function EscalationBadge() {
 
 export function Sidebar() {
   const { activeProject, isLoading } = useProjectPicker();
-  const { beadsOnly } = useCapabilities();
+  const { beadsOnly, beadsReadOnly } = useCapabilities();
   // Cold-start = picker has finished its initial fetch and there is no
   // active project. Suppress the muted state during the initial fetch
   // so the sidebar doesn't flicker between muted and active.
@@ -144,12 +159,24 @@ export function Sidebar() {
       </div>
       <nav className="flex flex-col gap-0.5 p-2" data-testid="sidebar-nav">
         {items.filter((item) => visibleInMode(item, beadsOnly)).map((item) => (
-          <NavItem key={item.to} item={item} coldStart={coldStart} beadsOnly={beadsOnly} />
+          <NavItem
+            key={item.to}
+            item={item}
+            coldStart={coldStart}
+            beadsOnly={beadsOnly}
+            readOnlyPlane={beadsReadOnly}
+          />
         ))}
       </nav>
       <div className="mt-auto flex flex-col gap-0.5 border-t border-neutral-200 p-2 dark:border-neutral-800">
         {secondaryItems.filter((item) => visibleInMode(item, beadsOnly)).map((item) => (
-          <NavItem key={item.to} item={item} coldStart={coldStart} beadsOnly={beadsOnly} />
+          <NavItem
+            key={item.to}
+            item={item}
+            coldStart={coldStart}
+            beadsOnly={beadsOnly}
+            readOnlyPlane={beadsReadOnly}
+          />
         ))}
       </div>
     </aside>
@@ -161,10 +188,29 @@ function visibleInMode(item: Item, beadsOnly: boolean): boolean {
   return item.to === '/board' || item.to === '/graph' || item.to === '/refine' || item.to === '/settings';
 }
 
-function NavItem({ item, coldStart, beadsOnly }: { item: Item; coldStart: boolean; beadsOnly: boolean }) {
-  const { to, label, Icon, workspaceScoped } = item;
+function NavItem({
+  item,
+  coldStart,
+  beadsOnly,
+  readOnlyPlane,
+}: {
+  item: Item;
+  coldStart: boolean;
+  beadsOnly: boolean;
+  readOnlyPlane: boolean;
+}) {
+  const { to, label, Icon, workspaceScoped, readOnlyCapable } = item;
   const { pathname } = useLocation();
-  const muted = !beadsOnly && coldStart && Boolean(workspaceScoped);
+  // On a read-only plane the project never arrives, so the cold-start
+  // rule cannot be what decides this: it would disable every pane
+  // permanently, including the board that is the entire point of the
+  // deployment, and blame a project the operator cannot create. Panes
+  // that read work are links; panes that drive it stay disabled and say
+  // so in their own words rather than the cold-start ones.
+  const muted = readOnlyPlane
+    ? !readOnlyCapable && Boolean(workspaceScoped)
+    : !beadsOnly && coldStart && Boolean(workspaceScoped);
+  const mutedTitle = readOnlyPlane ? READ_ONLY_TITLE : COLD_START_TITLE;
   const testId = `sidebar-item-${to.replace(/^\//, '')}`;
   const isEscalations = to === '/escalations';
   const active = isActivePath(pathname, item);
@@ -186,7 +232,7 @@ function NavItem({ item, coldStart, beadsOnly }: { item: Item; coldStart: boolea
         role="link"
         aria-disabled="true"
         aria-current={active ? 'page' : undefined}
-        title={COLD_START_TITLE}
+        title={mutedTitle}
         data-testid={testId}
         data-disabled="true"
         data-active={active ? 'true' : undefined}

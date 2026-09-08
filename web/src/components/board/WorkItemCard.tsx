@@ -1,4 +1,5 @@
 import type { KeyboardEvent } from 'react';
+import { claimLabel, claimState, claimTitle, claimTone } from './claim';
 import { AlertCircle, AlertTriangle, FileText, GitBranch, Paperclip, Workflow } from 'lucide-react';
 import type { StateCategory, WorkItem } from '@/types/core.gen';
 import { cn } from '@/lib/utils';
@@ -272,6 +273,21 @@ export function WorkItemCard({
 
       <footer className="mt-3 flex items-center gap-2 text-[11px] text-neutral-500 dark:text-neutral-400">
         {name && <span className="truncate">{name}</span>}
+        {/* The claim is a separate field from the assignee above, not a
+            replacement for it: the assignee owns the issue, the claim
+            says whether a worker is holding it right now, and an issue
+            assigned to a person with an expired bot lease is exactly the
+            case that needs both on the card. */}
+        {claimLabel(item) && (
+          <span
+            data-testid="card-claim"
+            data-claim-state={claimState(item) ?? undefined}
+            title={claimTitle(item)}
+            className={`truncate ${claimTone(claimState(item))}`}
+          >
+            {claimLabel(item)}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           {hasNotes(item) && (
             <FileText
